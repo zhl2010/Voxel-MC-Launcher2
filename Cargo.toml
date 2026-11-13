@@ -1,0 +1,24 @@
+# Voxel MC Launcher 2 — Tauri + Rust 重写版
+# 旧 Electron 版：https://github.com/zhl2010/Voxel-MC-Launcher
+[workspace]
+resolver = "2"
+members = [
+    "crates/voxel-core",
+    "crates/voxel-net",
+    "crates/voxel-meta",
+    "crates/voxel-runtime",
+    "crates/voxel-store",
+    "src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["zhl2010"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

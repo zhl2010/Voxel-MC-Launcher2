@@ -1,0 +1,22 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Tauri
+/src-tauri/target
+/src-tauri/gen
+
+# 前端构建（本期不走 vite，保留以防接入）
+/node_modules
+/dist
+/package-lock.json
+
+# 编辑器 / OS
+/.vscode
+/.idea
+Thumbs.db
+desktop.ini
+
+# 本地运行产物
+*.log
+/.launcher-user-data

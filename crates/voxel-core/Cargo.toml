@@ -1,0 +1,8 @@
+[package]
+name = "voxel-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 第一阶段：零依赖。Vol.2 接入时再加 serde / url / chrono，避免骨架编译期就拉一堆 crate。
+[dependencies]
