@@ -7,14 +7,17 @@
     "frontendDist": "../src"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Voxel Launcher",
         "width": 1240,
         "height": 800,
-        "minWidth": 1000,
+        "minWidth": 1020,
         "minHeight": 680,
-        "resizable": true
+        "resizable": true,
+        "decorations": false,
+        "backgroundColor": "#07110c"
       }
     ],
     "security": {
