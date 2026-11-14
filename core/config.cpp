@@ -95,6 +95,21 @@ nlohmann::json MergeAllowed(const nlohmann::json& patch, const nlohmann::json& b
     return next;
 }
 
+// MergeAllowed 只挡未知键和 null，挡不住"该是数字的字段被写成字符串"这类脏数据。
+// 后面 get<int>() 遇到非数字会抛异常，而 LoadSettings 在启动路径上，先把类型归一化。
+void CoerceTypes(nlohmann::json& settings) {
+    const nlohmann::json defaults = DefaultSettings();
+    for (auto it = defaults.begin(); it != defaults.end(); ++it) {
+        if (!settings.contains(it.key())) continue;
+        const nlohmann::json& value = settings[it.key()];
+        const bool typeOk = it.value().is_number()
+                                ? value.is_number()
+                                : it.value().is_boolean() ? value.is_boolean()
+                                                          : value.is_string();
+        if (!typeOk) settings[it.key()] = it.value();
+    }
+}
+
 nlohmann::json LoadSettings() {
     nlohmann::json defaults = DefaultSettings();
     const std::string raw = ReadTextFile(ConfigFile());
@@ -105,6 +120,7 @@ nlohmann::json LoadSettings() {
 
     if (!parsed.contains("settings") || !parsed["settings"].is_object()) return defaults;
     nlohmann::json merged = MergeAllowed(parsed["settings"], defaults);
+    CoerceTypes(merged);
 
     // 与旧版一致：minMemory 必须小于 maxMemory
     if (merged["minMemory"].get<int>() >= merged["maxMemory"].get<int>()) {

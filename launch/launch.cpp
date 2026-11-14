@@ -499,6 +499,24 @@ void Launcher::Shutdown() {
 }
 
 void Launcher::Run(nlohmann::json settings, Account account, std::wstring gameDir, EmitFn emit) {
+    // 启动链路里全是外部输入（配置、版本 JSON、清单、Java 探测），任何一处抛异常
+    // 都不能把整个启动器带崩：捕获后统一报错并回到 idle。
+    try {
+        RunImpl(std::move(settings), std::move(account), std::move(gameDir), std::move(emit));
+    } catch (const std::exception& error) {
+        SetStatus("idle", nullptr);
+        EmitGame(emit, "error",
+                 nlohmann::json{{"message", std::string("启动失败：") + error.what()}});
+        EmitState(emit);
+    } catch (...) {
+        SetStatus("idle", nullptr);
+        EmitGame(emit, "error", nlohmann::json{{"message", "启动失败：未知错误"}});
+        EmitState(emit);
+    }
+}
+
+void Launcher::RunImpl(nlohmann::json settings, Account account, std::wstring gameDir,
+                       EmitFn emit) {
     auto finishIdle = [&]() {
         SetStatus("idle", nullptr);
         EmitState(emit);
@@ -732,6 +750,15 @@ void Launcher::Run(nlohmann::json settings, Account account, std::wstring gameDi
     }
 
     const int code = static_cast<int>(exitCode);
+    if (code == STILL_ACTIVE) {
+        // 等了 5 秒还没退：进程多半还挂着（用户在游戏里），如实说明而不是报崩溃
+        EmitGame(emit, "log", nlohmann::json{{"level", "INFO"},
+                                             {"message", "游戏仍在运行，启动器不再等待其退出"},
+                                             {"time", NowIso()}});
+        EmitGame(emit, "closed", nlohmann::json{{"code", code}});
+        finishIdle();
+        return;
+    }
     if (code != 0) {
         EmitGame(emit, "crash", nlohmann::json{{"code", code},
                                                {"message", "游戏进程异常退出（代码 " +

@@ -40,6 +40,7 @@ class Launcher {
     Launcher() = default;
 
     void Run(nlohmann::json settings, Account account, std::wstring gameDir, EmitFn emit);
+    void RunImpl(nlohmann::json settings, Account account, std::wstring gameDir, EmitFn emit);
     void SetStatus(const std::string& status, const nlohmann::json& current);
     void EmitGame(const EmitFn& emit, const std::string& type, const nlohmann::json& data);
     void EmitState(const EmitFn& emit);
