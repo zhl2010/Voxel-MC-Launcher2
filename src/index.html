@@ -432,8 +432,13 @@
                 <p>首次使用某个版本时，eml-lib 会校验文件并自动安装匹配的 Java 运行时。</p>
               </div>
 
-              <!-- 版本下载页只展示版本列表与详情，不放「使用/下载」这类动作按钮：
-                   切换使用版本在游戏大厅的「切换版本」里做。 -->
+              <!-- 下载此版本：把该版本缺失的 client jar / libraries / assets 补齐并校验。
+                   已安装的版本点它会走校验修补，未安装的版本点它就是首次下载。 -->
+              <button id="downloadVersion" class="primary-btn" disabled>下载此版本</button>
+              <div id="downloadProgress" class="version-download-progress" hidden>
+                <div class="version-download-bar"><i id="downloadBarFill"></i></div>
+                <span id="downloadProgressText">准备下载…</span>
+              </div>
               <div class="detail-action-row">
                 <button id="openVersionFolder" class="ghost-btn half">打开该版本文件夹</button>
                 <button id="deleteVersion" class="ghost-btn half danger">删除此版本</button>
