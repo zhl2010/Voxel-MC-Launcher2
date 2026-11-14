@@ -179,8 +179,13 @@ bool PostForm(const nlohmann::json& settings, const std::wstring& url, const std
         if (error) *error = "无法连接登录服务器";
         return false;
     }
-    const std::wstring path = url.substr(url.find(L"login.microsoftonline.com") +
-                                         wcslen(L"login.microsoftonline.com"));
+    const size_t hostPos = url.find(L"login.microsoftonline.com");
+    if (hostPos == std::wstring::npos) {
+        WinHttpCloseHandle(session);
+        if (error) *error = "登录地址无效";
+        return false;
+    }
+    const std::wstring path = url.substr(hostPos + wcslen(L"login.microsoftonline.com"));
     HINTERNET request = WinHttpOpenRequest(connect, L"POST", path.c_str(), nullptr,
                                            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                            WINHTTP_FLAG_SECURE);
@@ -418,6 +423,23 @@ Account YggdrasilLogin(const nlohmann::json& settings, const std::string& server
     if (base.find("/authserver") == std::string::npos) {
         // 大多数站点根路径就是 yggdrasil，authserver 在其下
         if (base.find("/api/yggdrasil") == std::string::npos) base += "/api/yggdrasil";
+    }
+
+    // 密码在请求体里是明文：非 HTTPS 且非本机的认证服务器直接拒绝，
+    // 不给"密码在链路上裸奔"的机会（到这一步说明用户显式填了 http://）。
+    if (base.rfind("http://", 0) == 0) {
+        size_t end = base.find('/', 7);
+        if (end == std::string::npos) end = base.size();
+        const std::string host = base.substr(7, end - 7);
+        const bool local = host.rfind("localhost", 0) == 0 || host.rfind("127.", 0) == 0 ||
+                           host == "[::1]";
+        if (!local) {
+            if (error) {
+                *error = "该认证服务器使用 HTTP，密码会明文传输，已拒绝登录。"
+                         "请改用 https:// 的服务器地址";
+            }
+            return Account{};
+        }
     }
 
     const nlohmann::json body = {{"agent", {{"name", "Minecraft"}, {"version", 1}}},
