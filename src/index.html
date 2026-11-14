@@ -425,6 +425,12 @@
               </div>
 
               <button id="applyVersion" class="primary-btn" disabled>选择一个版本</button>
+              <!-- 未安装的版本走这里下载；已安装时隐藏 -->
+              <button id="downloadVersion" class="primary-btn" hidden>下载此版本</button>
+              <div id="downloadProgress" class="version-download-progress" hidden>
+                <div class="version-download-bar"><i id="downloadBarFill"></i></div>
+                <span id="downloadProgressText">准备下载…</span>
+              </div>
               <button id="verifyVersion" class="ghost-btn full">校验并修补游戏文件</button>
               <div class="detail-action-row">
                 <button id="openVersionFolder" class="ghost-btn half">打开该版本文件夹</button>

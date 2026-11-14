@@ -789,6 +789,27 @@ nlohmann::json VerifyVersion(const std::wstring& gameDir, const nlohmann::json& 
         return nlohmann::json{{"ok", false}, {"error", error ? WideToUtf8(*error) : "版本解析失败"}};
     }
 
+    // 版本 JSON 必须先落盘：BuildPlan 只负责算"缺哪些文件"，
+    // 它不会写 versions/<id>/<id>.json。原来这里直接 DownloadPlan(before)，
+    // 结果文件都下好了、版本目录却不存在，界面仍判定为"未安装"。
+    for (const auto& level : version.levels) {
+        const std::wstring dir = fs::Join(fs::Join(gameDir, L"versions"), Utf8ToWide(level.id));
+        const std::wstring jsonPath = fs::Join(dir, Utf8ToWide(level.id) + L".json");
+        if (fs::Exists(jsonPath)) continue;
+        if (!fs::EnsureDir(dir)) {
+            if (error) *error = L"无法创建版本目录：" + dir;
+            return nlohmann::json{{"ok", false},
+                                  {"id", id},
+                                  {"error", WideToUtf8(*error)}};
+        }
+        if (!fs::WriteTextAtomic(jsonPath, level.json.dump(2))) {
+            if (error) *error = L"版本 JSON 写入失败：" + jsonPath;
+            return nlohmann::json{{"ok", false},
+                                  {"id", id},
+                                  {"error", WideToUtf8(*error)}};
+        }
+    }
+
     VersionPlan before = BuildPlan(version, settings, gameDir, true, true);
     const int missingBefore = before.missing;
     const int corruptBefore = before.corrupt;
@@ -809,6 +830,27 @@ nlohmann::json VerifyVersion(const std::wstring& gameDir, const nlohmann::json& 
         }
         repaired = count;
         ExtractNatives(before, gameDir, version.id, nullptr, cancel);
+    }
+
+    // 资源对象：before 的 BuildPlan 是在索引还没落盘时算的，那一步 assets 是空的。
+    // 核心文件下完后索引已就位，这里必须重新算一次才能真正补齐 assets，
+    // 否则会出现"进度 100% 但 remaining 还有几千个资源"的假完成。
+    {
+        VersionPlan assets = BuildPlan(version, settings, gameDir, false, true);
+        if (!assets.downloads.empty()) {
+            if (!DownloadPlan(assets, settings, cancel, progress, error)) {
+                return nlohmann::json{
+                    {"ok", false},
+                    {"summary", {{"missing", missingBefore}, {"corrupt", corruptBefore},
+                                 {"present", before.present}}},
+                    {"repaired", repaired},
+                    {"remaining", static_cast<int>(assets.downloads.size())},
+                    {"id", id},
+                    {"error", error ? WideToUtf8(*error) : "资源文件下载失败"},
+                };
+            }
+            repaired += static_cast<int>(assets.downloads.size());
+        }
     }
 
     VersionPlan after = BuildPlan(version, settings, gameDir, true, true);

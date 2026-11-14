@@ -9227,3 +9227,30 @@ html[data-theme="light"] .directory-row .text-btn:hover {
 .content-field select:hover {
   border-color: var(--line-strong);
 }
+
+/* ===== 版本下载按钮与进度 ===== */
+
+.version-download-progress {
+  margin-top: 8px;
+}
+
+.version-download-bar {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+
+.version-download-bar > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.version-download-progress > span {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted, #9da19c);
+}

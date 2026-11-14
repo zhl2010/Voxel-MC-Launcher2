@@ -221,7 +221,8 @@ function cacheDom() {
     'hudDetail', 'hudSpeed', 'hudCollapse', 'hudRetry', 'hudLogs', 'hudHide', 'hudCancel',
     'hudPill', 'hudPillText', 'hudPillPercent', 'toastStack',
     'installedList', 'installedSummary', 'installedRefresh',
-    'contentGameVersion', 'contentLoader', 'contentInstallTarget'
+    'contentGameVersion', 'contentLoader', 'contentInstallTarget',
+    'downloadVersion', 'downloadProgress', 'downloadProgressText', 'downloadBarFill'
   ]
 
   for (const id of ids) dom[id] = document.getElementById(id)
@@ -299,6 +300,11 @@ function bindHome() {
     button.addEventListener('click', () => switchDownloadTab(button.dataset.downloadTab))
   })
   if (dom.installedRefresh) dom.installedRefresh.addEventListener('click', () => renderInstalledVersions())
+
+  // 下载选中版本：复用后端的校验/修补链路，它会把缺失文件补齐并生成版本 json
+  if (dom.downloadVersion) {
+    dom.downloadVersion.addEventListener('click', () => downloadPendingVersion())
+  }
 
   // 内容类型（模组 / 资源包 / 光影包）
   document.querySelectorAll('[data-content-type]').forEach((button) => {
@@ -1425,6 +1431,56 @@ function renderLocalLoader(version) {
   dom.loaderOptions.replaceChildren(note)
 }
 
+/**
+ * 下载并安装选中的版本。
+ * 用 game_verify 的"校验并修补"链路：它会把该版本缺的 client jar、libraries、
+ * assets 全部补齐并写出版本 json，完成后该条目就变成"已安装"，才可以被选择使用。
+ */
+async function downloadPendingVersion() {
+  const id = state.pendingVersion
+  if (!id) return
+  const version = state.versions.find((item) => item.id === id)
+  if (!version || version.installed || version.local) return
+
+  dom.downloadVersion.disabled = true
+  dom.downloadVersion.textContent = '正在下载…'
+  if (dom.downloadProgress) dom.downloadProgress.hidden = false
+  if (dom.downloadProgressText) dom.downloadProgressText.textContent = '准备下载…'
+  if (dom.downloadBarFill) dom.downloadBarFill.style.width = '0%'
+
+  // 后端在下载过程中通过 game:event 的 progress 推百分比，这里临时接管一下进度条
+  const stopProgress = api.onGameEvent((event) => {
+    if (event.type !== 'progress') return
+    const data = event.data || {}
+    const percent = Number(data.percent) || 0
+    if (dom.downloadBarFill) dom.downloadBarFill.style.width = `${Math.min(100, percent)}%`
+    if (dom.downloadProgressText) {
+      dom.downloadProgressText.textContent = data.typeLabel
+        ? `正在下载 ${data.typeLabel} ${Math.round(percent)}%`
+        : `正在下载 ${Math.round(percent)}%`
+    }
+  })
+
+  try {
+    const result = await invoke(api.verifyFiles(id))
+    appendLog('INFO', `已下载版本 ${id}（${result?.repaired ?? 0} 个文件）`)
+    // 重新拉清单，让这个版本变成"已安装"
+    await loadVersions(true)
+    updateVersionDetail()
+    renderVersionList()
+    toast(`版本 ${id} 已下载完成，现在可以使用`, 'success')
+  } catch (error) {
+    appendLog('ERROR', `下载版本失败：${error.message}`)
+    toast(`下载失败：${error.message}`, 'error')
+  } finally {
+    stopProgress()
+    if (dom.downloadVersion) dom.downloadVersion.disabled = false
+    if (dom.downloadProgress) dom.downloadProgress.hidden = true
+    // 恢复按钮文案（updateVersionDetail 会按安装状态重新决定显示哪个按钮）
+    updateVersionDetail()
+  }
+}
+
 function updateVersionDetail() {
   // The verify button state depends on the selected version, so refresh it on every detail render
   // (switching versions must never inherit another version's "校验中").
@@ -1436,7 +1492,9 @@ function updateVersionDetail() {
     dom.detailDate.textContent = '从左侧列表中选择版本，查看安装信息。'
     dom.detailInstalled.hidden = true
     dom.applyVersion.disabled = true
+    dom.applyVersion.hidden = false
     dom.applyVersion.textContent = '选择一个版本'
+    if (dom.downloadVersion) dom.downloadVersion.hidden = true
     return
   }
 
@@ -1458,8 +1516,24 @@ function updateVersionDetail() {
 
   const isApplied =
     state.pendingVersion === state.settings.version && state.pendingLoader === state.settings.loader
-  dom.applyVersion.disabled = false
-  dom.applyVersion.textContent = isApplied ? '返回游戏大厅' : '使用此版本'
+
+  // 只有"已安装"的版本才能被选中使用；未安装的只能先下载。
+  // 本地实例恒为已安装（installed=true），官方版本要看本机 versions/ 里有没有。
+  const installed = Boolean(version.installed || version.local)
+  if (installed) {
+    dom.applyVersion.hidden = false
+    dom.applyVersion.disabled = false
+    dom.applyVersion.textContent = isApplied ? '返回游戏大厅' : '使用此版本'
+    if (dom.downloadVersion) dom.downloadVersion.hidden = true
+  } else {
+    dom.applyVersion.hidden = true
+    dom.applyVersion.disabled = true
+    if (dom.downloadVersion) {
+      dom.downloadVersion.hidden = false
+      dom.downloadVersion.disabled = false
+      dom.downloadVersion.textContent = '下载此版本'
+    }
+  }
 }
 
 async function loadPendingLoaders() {
@@ -1747,6 +1821,15 @@ function renderLoaderOptions(options, errorMessage = '') {
 
 async function applySelectedVersion() {
   if (!state.pendingVersion) return
+
+  // 只有已安装的版本可以被应用为当前版本；未安装的必须先下载。
+  // 界面上按钮已经藏起来了，这里再兜一层，防止旧 DOM 状态或快捷键绕过去。
+  const targetVersion = state.versions.find((item) => item.id === state.pendingVersion)
+  if (!targetVersion || (!targetVersion.installed && !targetVersion.local)) {
+    toast('该版本尚未下载，请先点击「下载此版本」', 'warning')
+    return
+  }
+
   const pendingLoaderVersion = state.pendingLoaderVersion[state.pendingLoader] || ''
   const isApplied =
     state.pendingVersion === state.settings.version &&
