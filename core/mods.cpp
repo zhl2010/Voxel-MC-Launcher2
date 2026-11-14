@@ -212,6 +212,7 @@ nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameD
     // 拿到具体版本：给了 versionId 就直接用，否则取该项目最新的一个版本
     std::string downloadUrl;
     std::string fileName;
+    std::string expectedSha1;
     std::string chosenVersionId = versionId;
 
     if (chosenVersionId.empty()) {
@@ -227,6 +228,9 @@ nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameD
         chosenVersionId = list.front().value("id", std::string());
         downloadUrl = (*file).value("url", std::string());
         fileName = (*file).value("filename", std::string());
+        if ((*file).contains("hashes") && (*file)["hashes"].is_object()) {
+            expectedSha1 = (*file)["hashes"].value("sha1", std::string());
+        }
     }
 
     // versionId 是 Modrinth 的版本 ID；用 /version/{id} 取下载地址
@@ -237,6 +241,9 @@ nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameD
         if (!file) throw std::runtime_error("该版本没有可下载文件");
         downloadUrl = (*file).value("url", std::string());
         fileName = (*file).value("filename", std::string());
+        if ((*file).contains("hashes") && (*file)["hashes"].is_object()) {
+            expectedSha1 = (*file)["hashes"].value("sha1", std::string());
+        }
     }
 
     if (downloadUrl.empty()) throw std::runtime_error("无法解析下载地址");
@@ -257,6 +264,14 @@ nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameD
     std::wstring error;
     if (!net::GetFile(Utf8ToWide(downloadUrl), dest, settings, &error, [](uint64_t) {}, nullptr)) {
         throw std::runtime_error("下载失败" + (error.empty() ? "" : "：" + WideToUtf8(error)));
+    }
+
+    // Modrinth 响应自带 sha1：拿到就校验，不符删掉，防止 CDN 上的文件被换
+    if (expectedSha1.size() == 40) {
+        if (crypto::Sha1FileHex(dest) != expectedSha1) {
+            DeleteFileW(dest.c_str());
+            throw std::runtime_error("下载的文件校验失败（sha1 不符），已删除，请重试");
+        }
     }
 
     return nlohmann::json{{"ok", true},

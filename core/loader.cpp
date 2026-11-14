@@ -1,5 +1,6 @@
 #include "loader.h"
 
+#include "crypto.h"
 #include "fs.h"
 #include "installer.h"
 #include "proc.h"
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -240,6 +242,22 @@ nlohmann::json InstallNeoLike(const nlohmann::json& settings, const std::wstring
         fs::DeleteTree(tempDir);
         throw std::runtime_error(source.loader + " 安装包下载失败" +
                                  (error.empty() ? "" : "：" + WideToUtf8(error)));
+    }
+
+    // 镜像源上的 jar 有被替换的风险：maven artifact 都带 .sha1 旁文件，取得到就校验。
+    // 取不到不拦（镜像不保证每个文件都有），别让一次镜像抖动挡住安装。
+    {
+        std::string expected;
+        std::wstring shaError;
+        if (net::GetText(jarUrl + L".sha1", settings, expected, &shaError)) {
+            const size_t sp = expected.find_first_of(" \t\r\n");
+            std::string hex = sp == std::string::npos ? expected : expected.substr(0, sp);
+            for (auto& ch : hex) ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
+            if (hex.size() == 40 && crypto::Sha1FileHex(jarPath) != hex) {
+                fs::DeleteTree(tempDir);
+                throw std::runtime_error(source.loader + " 安装包校验失败（sha1 不符），请重试");
+            }
+        }
     }
 
     // 3) 用 bsdtar 解出 version.json（installer 是 zip）
