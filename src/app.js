@@ -725,13 +725,8 @@ function bindVersions() {
   dom.versionList.addEventListener('click', (event) => {
     const item = event.target instanceof Element ? event.target.closest('[data-version]') : null
     if (!item) return
-    // 只有已安装的版本才能被选中；未安装的条目点击无效，
-    // 需要先点「下载此版本」把它装到本机。
-    const version = state.versions.find((v) => v.id === item.dataset.version)
-    if (!version || (!version.installed && !version.local)) {
-      toast('该版本尚未安装，请先点击右侧「下载此版本」', 'info')
-      return
-    }
+    // 任何版本都可以点开查看详情并下载——"选中"只是把详情面板指向它。
+    // 真正的限制在"设为当前使用版本"那一步：只有已安装的版本才能被使用。
     selectVersion(item.dataset.version, { scroll: false })
   })
 
@@ -1546,10 +1541,11 @@ function renderVersionList() {
     button.setAttribute('aria-selected', version.id === state.pendingVersion ? 'true' : 'false')
     if (version.id === state.pendingVersion) button.classList.add('selected')
     if (version.id === state.settings.version) button.classList.add('current')
-    // 未安装的版本不可选中，视觉上也要弱化，避免以为点了就能用
+    // 未安装的版本可以点开查看并下载，只是还不能被"使用"——
+    // 用右侧详情里的「下载此版本」把它装到本机。
     if (!version.installed && !version.local) {
       button.classList.add('not-installed')
-      button.title = '该版本尚未安装，请先下载'
+      button.title = '尚未安装，可点击右侧「下载此版本」安装'
     }
 
     // 已安装的版本在列表里显示图标（自选方块 / 自定义上传）；未安装的保留小圆点

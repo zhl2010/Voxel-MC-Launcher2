@@ -9455,16 +9455,12 @@ html[data-theme="light"] .directory-row .text-btn:hover {
   image-rendering: pixelated;
 }
 
-/* ===== 未安装的版本：不可选中，视觉弱化 ===== */
+/* ===== 未安装的版本：可点开下载，但视觉上稍作区分 ===== */
 
 .version-item.not-installed {
-  opacity: 0.62;
-}
-
-.version-item.not-installed strong {
-  color: var(--muted-2, #6f736f);
+  opacity: 0.82;
 }
 
 .version-item.not-installed:hover {
-  opacity: 0.85;
+  opacity: 1;
 }
