@@ -364,7 +364,7 @@ function cacheDom() {
     'runtimeMemoryValue', 'runtimeMemoryText', 'runtimeJava', 'runtimeInstalled',
     'quickVersions', 'versionsRefresh', 'versionSearch', 'versionCount', 'versionList',
     'loadMoreVersions', 'detailType', 'detailVersion', 'detailInstalled', 'detailDate',
-    'loaderOptions', 'loaderHint', 'applyVersion', 'verifyVersion', 'openVersionFolder',
+    'loaderOptions', 'loaderHint', 'applyVersion', 'openVersionFolder',
     'deleteVersion', 'openVersionsFolder',
     'modsRefresh', 'modSearchInput', 'modSearchBtn', 'modsTarget', 'modsTargetLabel',
     'modsCompat', 'modsCompatTitle', 'modsCompatText', 'modsResultMeta', 'modResults', 'modPagination',
@@ -476,11 +476,8 @@ function bindHome() {
   })
   if (dom.installedRefresh) dom.installedRefresh.addEventListener('click', () => renderInstalledVersions())
 
-  // 下载选中版本：复用后端的校验/修补链路，它会把缺失文件补齐并生成版本 json
-  if (dom.downloadVersion) {
-    dom.downloadVersion.addEventListener('click', () => downloadPendingVersion())
-  }
-
+  // 下载 / 校验共用一个按钮，统一走 handleVerifyVersion（它带日志与状态管理）
+  dom.downloadVersion.addEventListener('click', handleVerifyVersion)
   // 自定义版本名与图标
   if (dom.detailDisplayName) {
     dom.detailDisplayName.addEventListener('blur', () => commitDisplayName())
@@ -522,7 +519,6 @@ function bindHome() {
   dom.versionsRefresh.addEventListener('click', () => loadVersions(true))
   dom.openGameFolder.addEventListener('click', () => openPath('game'))
   dom.openVersionsFolder.addEventListener('click', () => openPath('versions'))
-  dom.verifyVersion.addEventListener('click', handleVerifyVersion)
   dom.openVersionFolder.addEventListener('click', handleOpenVersionFolder)
   dom.deleteVersion.addEventListener('click', handleDeleteVersion)
 }
@@ -531,7 +527,7 @@ function bindHome() {
 async function handleOpenVersionFolder() {
   const versionId = state.pendingVersion || state.settings.version
   if (!versionId) {
-    toast('请先在版本库中选择一个版本', 'error')
+    toast('请先在版本下载页选择一个版本', 'error')
     return
   }
   try {
@@ -545,7 +541,7 @@ async function handleOpenVersionFolder() {
 async function handleDeleteVersion() {
   const versionId = state.pendingVersion || state.settings.version
   if (!versionId) {
-    toast('请先在版本库中选择一个版本', 'error')
+    toast('请先在版本下载页选择一个版本', 'error')
     return
   }
   if (state.launch.status !== 'idle') {
@@ -592,7 +588,7 @@ function renderVersionActions() {
 async function handleVerifyVersion() {
   const versionId = state.pendingVersion || state.settings.version
   if (!versionId) {
-    toast('请先在版本库中选择一个版本', 'error')
+    toast('请先在版本下载页选择一个版本', 'error')
     return
   }
   if (state.verifyingVersionId) {
@@ -632,16 +628,26 @@ async function handleVerifyVersion() {
 function renderVerifyButton() {
   const selected = state.pendingVersion || state.settings.version
   const verifying = state.verifyingVersionId
+  // 下载与校验共用一个按钮（dom.downloadVersion）
+  const button = dom.downloadVersion
+  if (!button) return
+
   if (verifying && verifying === selected) {
-    dom.verifyVersion.disabled = true
-    dom.verifyVersion.textContent = '正在校验…'
-    dom.verifyVersion.dataset.state = 'verifying'
+    button.disabled = true
+    button.textContent = '正在下载 / 校验…'
+    button.dataset.state = 'verifying'
     return
   }
-  dom.verifyVersion.disabled = false
-  dom.verifyVersion.dataset.state = 'idle'
-  dom.verifyVersion.textContent = verifying ? `校验中（${verifying}）` : '重新下载 / 校验文件'
-  dom.verifyVersion.title = verifying ? `正在校验 ${verifying}，请等待其完成` : ''
+
+  button.disabled = false
+  button.dataset.state = 'idle'
+  button.title = verifying ? `正在校验 ${verifying}，请等待其完成` : ''
+
+  // 文案按"当前选中版本装没装"决定，由 updateVersionDetail 负责设置默认值；
+  // 这里仅在存在别的版本正在校验时提示等待，不覆盖正常文案。
+  if (verifying) {
+    button.textContent = `校验中（${verifying}）`
+  }
 }
 
 function bindVersions() {
@@ -1635,53 +1641,6 @@ function renderLocalLoader(version) {
  * 用 game_verify 的"校验并修补"链路：它会把该版本缺的 client jar、libraries、
  * assets 全部补齐并写出版本 json，完成后该条目就变成"已安装"，才可以被选择使用。
  */
-async function downloadPendingVersion() {
-  const id = state.pendingVersion
-  if (!id) return
-  const version = state.versions.find((item) => item.id === id)
-  if (!version) return
-  // 已安装的版本也允许再次下载：后端会走校验并只补缺失/损坏的文件，
-  // 对"重新点一次确认文件完整"或者"同一版本装第二个加载器"都适用。
-
-  dom.downloadVersion.disabled = true
-  dom.downloadVersion.textContent = '正在下载…'
-  if (dom.downloadProgress) dom.downloadProgress.hidden = false
-  if (dom.downloadProgressText) dom.downloadProgressText.textContent = '准备下载…'
-  if (dom.downloadBarFill) dom.downloadBarFill.style.width = '0%'
-
-  // 后端在下载过程中通过 game:event 的 progress 推百分比，这里临时接管一下进度条
-  const stopProgress = api.onGameEvent((event) => {
-    if (event.type !== 'progress') return
-    const data = event.data || {}
-    const percent = Number(data.percent) || 0
-    if (dom.downloadBarFill) dom.downloadBarFill.style.width = `${Math.min(100, percent)}%`
-    if (dom.downloadProgressText) {
-      dom.downloadProgressText.textContent = data.typeLabel
-        ? `正在下载 ${data.typeLabel} ${Math.round(percent)}%`
-        : `正在下载 ${Math.round(percent)}%`
-    }
-  })
-
-  try {
-    const result = await invoke(api.verifyFiles(id))
-    appendLog('INFO', `已下载版本 ${id}（${result?.repaired ?? 0} 个文件）`)
-    // 重新拉清单，让这个版本变成"已安装"
-    await loadVersions(true)
-    updateVersionDetail()
-    renderVersionList()
-    toast(`版本 ${id} 已下载完成，现在可以使用`, 'success')
-  } catch (error) {
-    appendLog('ERROR', `下载版本失败：${error.message}`)
-    toast(`下载失败：${error.message}`, 'error')
-  } finally {
-    stopProgress()
-    if (dom.downloadVersion) dom.downloadVersion.disabled = false
-    if (dom.downloadProgress) dom.downloadProgress.hidden = true
-    // 恢复按钮文案（updateVersionDetail 会按安装状态重新决定显示哪个按钮）
-    updateVersionDetail()
-  }
-}
-
 function updateVersionDetail() {
   // The verify button state depends on the selected version, so refresh it on every detail render
   // (switching versions must never inherit another version's "校验中").
@@ -1723,10 +1682,9 @@ function updateVersionDetail() {
 
   // 只有"已安装"的版本才能被选中使用；未安装的只能先下载。
   // 本地实例恒为已安装（installed=true），官方版本要看本机 versions/ 里有没有。
-  // 版面规则：
-  //   已安装 → 主按钮是「使用此版本」；「重新下载 / 校验」作为次要按钮放在它下方
-  //   未安装 → 主按钮位置换成「下载此版本」，没有「使用」
-  // 下载和校验是同一个后端动作，所以不存在两个重复的按钮。
+  // 版面按安装状态二选一，绝不并列两个下载类按钮：
+  //   已安装 → 「使用此版本」（主按钮）+「重新下载 / 校验文件」
+  //   未安装 → 「下载此版本」（唯一动作）+ 文件夹/删除
   const installed = Boolean(version.installed || version.local)
   if (installed) {
     dom.applyVersion.hidden = false
@@ -1737,10 +1695,11 @@ function updateVersionDetail() {
     dom.applyVersion.disabled = true
   }
 
+  // 同一个按钮承担两种文案：未安装是"下载"，已安装是"重新下载/校验"
   if (dom.downloadVersion) {
-    dom.downloadVersion.hidden = installed
+    dom.downloadVersion.hidden = false
     dom.downloadVersion.disabled = false
-    dom.downloadVersion.textContent = '下载此版本'
+    dom.downloadVersion.textContent = installed ? '重新下载 / 校验文件' : '下载此版本'
   }
 }
 

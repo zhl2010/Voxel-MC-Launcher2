@@ -433,15 +433,14 @@
               </div>
 
               <button id="applyVersion" class="primary-btn" disabled>选择一个版本</button>
-              <!-- 下载 / 校验是同一个后端动作（补齐缺失并校验），合成一个按钮，
-                   不再和「使用此版本」抢同一处版面 -->
-              <button id="downloadVersion" class="ghost-btn full" hidden>下载此版本</button>
               <div id="downloadProgress" class="version-download-progress" hidden>
                 <div class="version-download-bar"><i id="downloadBarFill"></i></div>
                 <span id="downloadProgressText">准备下载…</span>
               </div>
-              <!-- 已安装的版本也允许重新下载：补齐缺失 / 修正损坏 -->
-              <button id="verifyVersion" class="ghost-btn full">重新下载 / 校验文件</button>
+              <!-- 一个按钮承担两种文案：
+                   未安装 → 「下载此版本」；已安装 → 「重新下载 / 校验文件」。
+                   它们走的是同一个后端动作（补齐缺失并校验），没必要并列两个。 -->
+              <button id="downloadVersion" class="ghost-btn full">下载此版本</button>
               <div class="detail-action-row">
                 <button id="openVersionFolder" class="ghost-btn half">打开该版本文件夹</button>
                 <button id="deleteVersion" class="ghost-btn half danger">删除此版本</button>
