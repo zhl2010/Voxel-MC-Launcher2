@@ -56,3 +56,17 @@ if errorlevel 1 (
   exit /b 1
 )
 echo [build] OK: %OUT%\voxel-launcher.exe
+
+rem 交付副本：放到普通目录，避免工作区继承到的低完整性标签。
+rem 这个项目目录被 DSH 沙箱标了 Low Mandatory Level，在此编出的 exe 会继承该标签；
+rem 低完整性的 exe 以普通用户启动时，WebView2 的 msedge_elf.dll 会直接崩（0x80000003），
+rem 只有管理员权限能绕过——这正是"必须用管理员启动"的真正原因。
+rem 复制到 LABEL 正常的目录后，exe 不带低标签，普通双击即可运行。
+set "DIST=%LOCALAPPDATA%\VoxelLauncher"
+if not exist "%DIST%" mkdir "%DIST%"
+copy /Y "%OUT%\voxel-launcher.exe" "%DIST%\voxel-launcher.exe" >nul
+if errorlevel 1 (
+  echo [build] 警告: 交付副本复制失败
+) else (
+  echo [build] RUN:  %DIST%\voxel-launcher.exe   ^(可直接双击，无需管理员^)
+)

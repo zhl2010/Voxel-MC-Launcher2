@@ -25,6 +25,24 @@ third_party/      WebView2 SDK、nlohmann::json
 `WebResourceRequested` 从内存应答 `https://voxel.local/*`，不再需要 exe 旁边的
 `src/` 目录。改了前端必须重新编译，否则 exe 里还是旧资源。
 
+`build.cmd` 还会把同一份 exe 复制到 `%LOCALAPPDATA%\VoxelLauncher\`，作为**交付副本**，
+原因见下。
+
+## 关于"必须以管理员身份运行"
+
+如果 exe 所在的目录被打了**低完整性标签**（`Mandatory Label\Low Mandatory Level`），
+在此编出的 exe 会继承该标签。低完整性的 exe 以普通用户启动时，WebView2 的浏览器进程
+会在 `msedge_elf.dll` 里崩溃（异常码 `0x80000003`），表现为"只有管理员能打开"。
+
+DSH 沙箱会给工作区目录打这个标签，所以在工作区里直接运行的产物会中招。两种解法：
+
+- 用 `build.cmd` 产出的交付副本（`%LOCALAPPDATA%\VoxelLauncher\voxel-launcher.exe`），
+  它不带低标签，普通双击即可；
+- 或者对工作区内的 exe 执行一次（需管理员）：
+  `icacls build\voxel-launcher.exe /setintegritylevel Medium`
+
+重新编译会覆盖 exe 并重新继承目录标签，所以每次构建后都需要重新复制或重设。
+
 ## 开发
 
 需要 Visual Studio 2022 Build Tools（含 C++ 工作负载）与 Windows SDK，以及 WebView2 Runtime（Win10 1803+ 通常自带）。
