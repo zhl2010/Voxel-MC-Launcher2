@@ -43,6 +43,17 @@ DSH 沙箱会给工作区目录打这个标签，所以在工作区里直接运�
 
 重新编译会覆盖 exe 并重新继承目录标签，所以每次构建后都需要重新复制或重设。
 
+## 缺 WebView2 运行时时的提示
+
+启动时会先用 `GetAvailableCoreWebView2BrowserVersionString` 探测运行时：
+
+- **没装**：不发无意义的空壳窗口，直接弹窗说明原因与安装步骤，点【是】打开
+  Microsoft 的 WebView2 下载页；
+- **装了但起不来**（`0x8000FFFF` / `0x800700AA`）：区分成"运行时异常"，提示走
+  Standalone Installer 做修复安装，并显示已装版本号与真实错误码；
+- 两种提示都会强调：不要用 1.9 MB 的 Evergreen Bootstrapper——它只比对版本号，
+  显示"已安装"就退出，不会修复。
+
 ## 开发
 
 需要 Visual Studio 2022 Build Tools（含 C++ 工作负载）与 Windows SDK，以及 WebView2 Runtime（Win10 1803+ 通常自带）。

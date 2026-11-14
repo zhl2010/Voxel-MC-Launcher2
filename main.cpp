@@ -126,6 +126,45 @@ const wchar_t* HrHint(HRESULT hr) {
            L"请尝试重新安装该运行时后再启动。";
 }
 
+// 探测系统里有没有装 WebView2 运行时。
+//
+// GetAvailableCoreWebView2BrowserVersionString 会读 HKLM/HKCU 下的 EdgeUpdate 登记，
+// 覆盖 system-level 与 per-user 两种安装；返回 S_OK 且版本串非空才算可用。
+// 注意它只证明"登记存在"，不保证运行时没坏——真的起不来时 Create 阶段还会报错，
+// 那条路径由下面的 HrHint 兜底。
+bool ProbeWebView2Runtime(std::wstring* version) {
+    LPWSTR text = nullptr;
+    const HRESULT hr = GetAvailableCoreWebView2BrowserVersionString(nullptr, &text);
+    bool ok = SUCCEEDED(hr) && text && text[0] != L'\0';
+    if (ok && version) *version = text;
+    if (text) CoTaskMemFree(text);
+    return ok;
+}
+
+// 缺少运行时时给出的引导。
+// 老版本只弹一句"请安装"，用户既不知道去哪下、也不知道该装哪种；
+// 这里把官方页面直接给出来，并区分两种安装方式——
+// 用 Evergreen Bootstrapper 会立刻返回"已安装"而不做修复，所以缺/坏时推荐独立离线包。
+void OfferRuntimeInstall(HWND owner, const wchar_t* reason) {
+    const wchar_t* kUrl = L"https://developer.microsoft.com/microsoft-edge/webview2/";
+    wchar_t text[1200]{};
+    swprintf_s(text,
+               L"%s\n\n"
+               L"这个启动器需要 Microsoft Edge WebView2 Runtime 才能显示界面。\n"
+               L"Windows 10 1803 及以后通常已经自带；没装的机器请按下面操作：\n\n"
+               L"1. 点【是】，在打开的页面里下载「Evergreen Standalone Installer」（x64，约 150 MB）\n"
+               L"2. 运行下载好的安装包，装完重新打开启动器\n\n"
+               L"提示：如果系统显示「已安装」但启动器仍打不开，请改用 Standalone Installer\n"
+               L"修复安装（那个 1.9 MB 的 bootstrapper 只会检查版本号，不会修复）。\n\n"
+               L"是否现在打开下载页面？",
+               reason);
+
+    const int choice = MessageBoxW(owner, text, kAppTitle, MB_YESNO | MB_ICONWARNING);
+    if (choice == IDYES) {
+        ShellExecuteW(nullptr, L"open", kUrl, nullptr, nullptr, SW_SHOWNORMAL);
+    }
+}
+
 }  // namespace
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     // 单实例保护
@@ -156,6 +195,17 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
         return 2;
     }
     window.SetMinimumSize(1020, 680);
+
+    // 先探测运行时再显示窗口：缺运行时是"没装组件"，不该让用户先看到一个空壳窗口。
+    std::wstring runtimeVersion;
+    if (!ProbeWebView2Runtime(&runtimeVersion)) {
+        OfferRuntimeInstall(nullptr, L"未检测到 Microsoft Edge WebView2 Runtime。");
+        DestroyWindow(window.Handle());
+        CoUninitialize();
+        if (mutex) CloseHandle(mutex);
+        return 4;
+    }
+
     window.Show(nCmdShow);
 
     WebViewHost webview;
@@ -167,6 +217,25 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
         // 带上真实错误码和出错阶段。只报"请安装运行时"会把用户和排查者
         // 一起带偏——实测最常见的 0x800700AA 是数据目录问题，不是缺运行时。
         const HRESULT hr = webview.LastError();
+
+        // 登记存在但进程起不来（运行时装坏了）：这条与"没装"是两码事，
+        // 单独引导用户去做修复安装。
+        const bool runtimeBroken = hr == E_UNEXPECTED || hr == HRESULT_FROM_WIN32(ERROR_BUSY);
+        if (runtimeBroken) {
+            wchar_t reason[320]{};
+            swprintf_s(reason,
+                       L"WebView2 运行时异常（错误码 0x%08lX，阶段：%s）。\n"
+                       L"检测到已安装版本 %s，但浏览器进程无法启动。",
+                       static_cast<unsigned long>(hr),
+                       webview.LastStage().empty() ? L"未知" : webview.LastStage().c_str(),
+                       runtimeVersion.empty() ? L"未知" : runtimeVersion.c_str());
+            OfferRuntimeInstall(window.Handle(), reason);
+            DestroyWindow(window.Handle());
+            CoUninitialize();
+            if (mutex) CloseHandle(mutex);
+            return 5;
+        }
+
         wchar_t detail[640]{};
         swprintf_s(detail,
                    L"WebView2 初始化失败。\n\n"
