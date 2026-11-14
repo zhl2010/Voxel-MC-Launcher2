@@ -104,9 +104,15 @@ nlohmann::json ScanLocalVersions(const std::wstring& gameDir) {
         list.push_back(entry);
     }
 
-    // 新版在前：旧版 UI 的版本库页就是这么排的
-    std::sort(list.begin(), list.end(), [](const nlohmann::json& a, const nlohmann::json& b) {
-        return a.value("releaseTime", std::string()) > b.value("releaseTime", std::string());
+    // 新版在前：旧版 UI 的版本库页就是这么排的。
+    // 实例的版本 json 可能只有 id/inheritsFrom/type，releaseTime 是 null，
+    // 直接 value() 取字符串会抛 type_error 把整份清单带崩，这里统一兜成空串。
+    auto releaseStamp = [](const nlohmann::json& entry) {
+        if (!entry.contains("releaseTime") || !entry["releaseTime"].is_string()) return std::string();
+        return entry["releaseTime"].get<std::string>();
+    };
+    std::sort(list.begin(), list.end(), [&releaseStamp](const nlohmann::json& a, const nlohmann::json& b) {
+        return releaseStamp(a) > releaseStamp(b);
     });
     return list;
 }

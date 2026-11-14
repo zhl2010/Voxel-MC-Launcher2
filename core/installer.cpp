@@ -561,10 +561,16 @@ VersionPlan BuildPlan(const ResolvedVersion& version, const nlohmann::json& sett
 }
 
 bool DownloadPlan(const VersionPlan& plan, const nlohmann::json& settings,
-                  std::atomic<bool>* cancel, const ProgressFn& progress, std::wstring* error) {
+                  std::atomic<bool>* cancel, const ProgressFn& progress, std::wstring* error,
+                  double percentBase = 0.0, double percentSpan = 99.0) {
+    // 一次安装会分几轮下载（核心文件、资源对象、二次修补），每轮都从 0% 起报会让
+    // 进度条来回跳，看着像卡住。所以每轮只占用 [percentBase, percentBase + percentSpan]
+    // 这一段，整体单调前进。
+    const double percentEnd = std::min(99.0, percentBase + percentSpan);
     if (plan.downloads.empty()) {
         if (progress) {
-            progress(nlohmann::json{{"stage", "download"}, {"percent", 100}, {"finished", true},
+            progress(nlohmann::json{{"stage", "download"}, {"percent", percentEnd},
+                                    {"finished", true},
                                     {"overallTotalBytes", 0}, {"overallDownloadedBytes", 0},
                                     {"overallTotalFiles", 0}, {"overallDownloadedFiles", 0}});
         }
@@ -658,7 +664,9 @@ bool DownloadPlan(const VersionPlan& plan, const nlohmann::json& settings,
             const uint32_t deltaMs = now - lastTick;
             const double speed = deltaMs > 0 ? (deltaBytes * 1000.0 / deltaMs) : 0.0;
             const double percent =
-                totalBytes > 0 ? std::min(99.0, bytes * 100.0 / static_cast<double>(totalBytes)) : 99.0;
+                totalBytes > 0
+                    ? percentBase + std::min(1.0, bytes / static_cast<double>(totalBytes)) * percentSpan
+                    : percentEnd;
             progress(nlohmann::json{
                 {"stage", "download"},
                 {"percent", percent},
@@ -696,7 +704,7 @@ bool DownloadPlan(const VersionPlan& plan, const nlohmann::json& settings,
         const uint64_t bytes = shared.bytes.load();
         progress(nlohmann::json{
             {"stage", "download"},
-            {"percent", 100},
+            {"percent", percentEnd},
             {"typeLabel", dominantType},
             {"downloadedBytes", bytes},
             {"totalBytes", totalBytes},
@@ -792,13 +800,15 @@ bool EnsureVersion(const ResolvedVersion& version, const nlohmann::json& setting
     // 核心文件：jar / 库 / 索引 / 日志配置
     VersionPlan core = BuildPlan(version, settings, gameDir, true, false);
     if (outPlan) *outPlan = core;
-    if (!DownloadPlan(core, settings, cancel, progress, error)) return false;
+    if (!DownloadPlan(core, settings, cancel, progress, error, 0.0, 60.0)) return false;
 
     // 资源对象：索引刚刚可能才下载好，这一步重新读盘
     VersionPlan assets = BuildPlan(version, settings, gameDir, false, true);
     if (outPlan) *outPlan = assets;
-    if (!DownloadPlan(assets, settings, cancel, progress, error)) return false;
+    if (!DownloadPlan(assets, settings, cancel, progress, error, 60.0, 39.0)) return false;
 
+    // 解压没有细粒度进度，至少明确告诉前端"现在在解压"，别让它停在 99% 像卡死
+    if (progress) progress(nlohmann::json{{"stage", "extract"}, {"percent", 99}});
     if (!ExtractNatives(core, gameDir, version.id, nullptr, cancel)) {
         // natives 解压失败不是致命错误：Java 会报 UnsatisfiedLinkError，
         // 用明确的错误信息比静默启动失败更好排查
@@ -844,7 +854,7 @@ nlohmann::json VerifyVersion(const std::wstring& gameDir, const nlohmann::json& 
     int repaired = 0;
     if (!before.downloads.empty()) {
         const int count = static_cast<int>(before.downloads.size());
-        if (!DownloadPlan(before, settings, cancel, progress, error)) {
+        if (!DownloadPlan(before, settings, cancel, progress, error, 0.0, 60.0)) {
             return nlohmann::json{
                 {"ok", false},
                 {"summary", {{"missing", missingBefore}, {"corrupt", corruptBefore},
@@ -856,6 +866,7 @@ nlohmann::json VerifyVersion(const std::wstring& gameDir, const nlohmann::json& 
             };
         }
         repaired = count;
+        if (progress) progress(nlohmann::json{{"stage", "extract"}, {"percent", 60}});
         ExtractNatives(before, gameDir, version.id, nullptr, cancel);
     }
 
@@ -865,7 +876,9 @@ nlohmann::json VerifyVersion(const std::wstring& gameDir, const nlohmann::json& 
     {
         VersionPlan assets = BuildPlan(version, settings, gameDir, false, true);
         if (!assets.downloads.empty()) {
-            if (!DownloadPlan(assets, settings, cancel, progress, error)) {
+            // 前面没下过东西（before 为空）时这一轮就是全部，直接占满 99%
+            const double base = before.downloads.empty() ? 0.0 : 60.0;
+            if (!DownloadPlan(assets, settings, cancel, progress, error, base, 99.0 - base)) {
                 return nlohmann::json{
                     {"ok", false},
                     {"summary", {{"missing", missingBefore}, {"corrupt", corruptBefore},

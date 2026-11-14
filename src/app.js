@@ -684,16 +684,34 @@ async function handleDownloadVersion() {
 
   appendLog('INFO', `开始下载 / 校验 ${id} …`)
 
-  // 后端通过 game:event 的 progress 推百分比
+  // 后端通过 game:event 的 progress 推百分比、已下载字节和瞬时速度
+  let shownPercent = 0
   const stopProgress = api.onGameEvent((event) => {
     if (event.type !== 'progress') return
     const data = event.data || {}
-    const percent = Number(data.percent) || 0
+
+    if (data.stage === 'extract') {
+      // 用后端给的百分比（解压发生在哪一段就停在哪一段），不要硬写成 99%，
+      // 否则「先解压 nativs 再下资源」的流程会让进度条先跳满再退回 60%。
+      const percent = Math.max(shownPercent, Number(data.percent) || 0)
+      shownPercent = percent
+      if (dom.downloadBarFill) dom.downloadBarFill.style.width = `${Math.min(100, percent)}%`
+      if (dom.downloadProgressText) dom.downloadProgressText.textContent = '正在解压运行库…'
+      return
+    }
+
+    // 安装分几轮下载，后端已按阶段分配百分比；这里再兜一次单调递增，
+    // 避免任何情况下进度条往回退，看起来像卡住。
+    const percent = Math.max(shownPercent, Number(data.percent) || 0)
+    shownPercent = percent
     if (dom.downloadBarFill) dom.downloadBarFill.style.width = `${Math.min(100, percent)}%`
     if (dom.downloadProgressText) {
-      dom.downloadProgressText.textContent = data.typeLabel
-        ? `正在下载 ${data.typeLabel} ${Math.round(percent)}%`
-        : `正在下载 ${Math.round(percent)}%`
+      const parts = [`正在下载 ${data.typeLabel || '游戏文件'} ${Math.round(percent)}%`]
+      const speed = Number(data.speed) || 0
+      if (speed > 0) parts.push(`${formatSpeed(speed)}/s`)
+      // 本轮下载收尾时后端会补一条 speed=0 的事件，别让它闪成"等待响应"
+      else if (!data.finished) parts.push('等待响应…')
+      dom.downloadProgressText.textContent = parts.join(' · ')
     }
   })
 
@@ -705,6 +723,9 @@ async function handleDownloadVersion() {
       `完成：修补 ${result?.repaired ?? 0} 个，剩余缺失 ${result?.remaining ?? 0} 个`
     )
     if (result?.ok) {
+      // 收尾：把进度条补满并换掉"正在下载"文案，避免完成后界面还停在 99% 让人以为没结束
+      if (dom.downloadBarFill) dom.downloadBarFill.style.width = '100%'
+      if (dom.downloadProgressText) dom.downloadProgressText.textContent = '下载完成'
       toast(wasInstalled ? `实例 ${id} 已创建` : `版本 ${id} 下载完成`, 'success')
     } else if ((result?.remaining ?? 0) > 0) {
       toast(`仍有 ${result.remaining} 个文件缺失，请检查网络后重试`, 'error')
