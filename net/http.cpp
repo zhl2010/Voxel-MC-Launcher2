@@ -86,6 +86,35 @@ std::mutex g_handleMutex;
 std::map<std::wstring, HINTERNET> g_sessions;
 std::map<std::wstring, HINTERNET> g_connections;
 
+// 镜像/官方源健康度。源不可用时逐文件重试会把整体拖垮：BMCLAPI 的 assets
+// 端点会 302 到第三方节点（open-bmcl-api.lunar.cc），实测 15 秒才回应且 SSL
+// 连接失败；几千个资源文件每个白等两次，安装时间从两分钟变成几十分钟。
+// 连续失败到阈值后本次运行直接换源，成功一次即恢复。
+constexpr int SOURCE_FAILURE_LIMIT = 2;
+
+struct SourceHealth {
+    int mirrorFails = 0;
+    int originFails = 0;
+};
+
+std::mutex g_sourceMutex;
+std::map<std::wstring, SourceHealth> g_sourceHealth;
+
+bool SourceBroken(const std::wstring& host, bool mirror) {
+    if (host.empty()) return false;
+    std::lock_guard<std::mutex> lock(g_sourceMutex);
+    auto it = g_sourceHealth.find(host);
+    if (it == g_sourceHealth.end()) return false;
+    return (mirror ? it->second.mirrorFails : it->second.originFails) >= SOURCE_FAILURE_LIMIT;
+}
+
+void NoteSourceResult(const std::wstring& host, bool mirror, bool ok) {
+    if (host.empty()) return;
+    std::lock_guard<std::mutex> lock(g_sourceMutex);
+    int& fails = mirror ? g_sourceHealth[host].mirrorFails : g_sourceHealth[host].originFails;
+    fails = ok ? 0 : fails + 1;
+}
+
 HINTERNET GetSession(const std::wstring& proxyText) {
     std::lock_guard<std::mutex> lock(g_handleMutex);
     const std::wstring key = proxyText;
@@ -301,7 +330,20 @@ std::vector<std::wstring> Candidates(const std::wstring& url, const nlohmann::js
         out.push_back(url);
         return out;
     }
-    if (LooksLikeMetaDocument(url)) {
+
+    UrlParts parts;
+    const std::wstring host = ParseUrl(url, parts) ? Lower(parts.host) : std::wstring();
+    const bool mirrorBroken = SourceBroken(host, true);
+    const bool originBroken = SourceBroken(host, false);
+
+    // 资源对象（assets）优先官方 CDN：镜像要把请求 302 到第三方节点，
+    // 实测单文件 15 秒且经常失败，而官方 CDN 只要 0.35 秒。
+    // meta 文档也优先官方，保证版本清单权威；其余（maven 等）仍镜像优先。
+    const bool preferOrigin =
+        host == L"resources.download.minecraft.net" || LooksLikeMetaDocument(url);
+
+    const bool originFirst = mirrorBroken || (!originBroken && preferOrigin);
+    if (originFirst) {
         out.push_back(url);
         out.push_back(mirror);
     } else {
@@ -317,10 +359,19 @@ bool GetText(const std::wstring& url, const nlohmann::json& settings, std::strin
     const std::vector<std::wstring> candidates = Candidates(url, settings);
     std::wstring lastError;
 
+    UrlParts origin;
+    const std::wstring originHost = ParseUrl(url, origin) ? Lower(origin.host) : std::wstring();
+
     for (const auto& candidate : candidates) {
-        for (int attempt = 0; attempt < ATTEMPTS_PER_CANDIDATE; ++attempt) {
+        const bool isMirror = candidate != url;
+        // 镜像只试一次：它一旦不健康，每次重试都要等满超时，代价远高于收益
+        const int attempts = isMirror ? 1 : ATTEMPTS_PER_CANDIDATE;
+        for (int attempt = 0; attempt < attempts; ++attempt) {
             std::string body;
-            if (RequestOnce(candidate, proxy, &body, nullptr, nullptr, nullptr, &lastError)) {
+            const bool ok =
+                RequestOnce(candidate, proxy, &body, nullptr, nullptr, nullptr, &lastError);
+            NoteSourceResult(originHost, isMirror, ok);
+            if (ok) {
                 out = std::move(body);
                 return true;
             }
@@ -363,13 +414,22 @@ bool GetFile(const std::wstring& url, const std::wstring& dest, const nlohmann::
     const std::vector<std::wstring> candidates = Candidates(url, settings);
     std::wstring lastError;
 
+    UrlParts origin;
+    const std::wstring originHost = ParseUrl(url, origin) ? Lower(origin.host) : std::wstring();
+
     for (const auto& candidate : candidates) {
-        for (int attempt = 0; attempt < ATTEMPTS_PER_CANDIDATE; ++attempt) {
+        const bool isMirror = candidate != url;
+        // 镜像只试一次：它一旦不健康，每次重试都要等满超时，代价远高于收益
+        const int attempts = isMirror ? 1 : ATTEMPTS_PER_CANDIDATE;
+        for (int attempt = 0; attempt < attempts; ++attempt) {
             if (cancel && cancel->load()) {
                 if (error) *error = L"已取消";
                 return false;
             }
-            if (GetFileOnce(candidate, dest, proxy, &lastError, onChunk, cancel)) return true;
+            const bool ok =
+                GetFileOnce(candidate, dest, proxy, &lastError, onChunk, cancel);
+            NoteSourceResult(originHost, isMirror, ok);
+            if (ok) return true;
             if (cancel && cancel->load()) {
                 if (error) *error = L"已取消";
                 return false;
