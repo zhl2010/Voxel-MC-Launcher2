@@ -1312,7 +1312,9 @@ function populateContentTargets() {
     const frag = document.createDocumentFragment()
     const auto = document.createElement('option')
     auto.value = ''
-    auto.textContent = '当前使用版本'
+    auto.textContent = state.settings?.versionIsolation
+      ? '自动：按所选版本与加载器'
+      : '自动：共用 mods（未开启版本隔离）'
     frag.append(auto)
     for (const item of installed) {
       const option = document.createElement('option')
@@ -2174,6 +2176,19 @@ function formatDate(value) {
 
 const MOD_LOADERS = new Set(['fabric', 'quilt', 'forge', 'neoforge'])
 
+/** 按「游戏版本 + 加载器」找本机实例：1.21.11 + fabric → 1.21.11-fabric-0.16.9。 */
+function findContentInstance(version, loader) {
+  if (!version) return null
+  const withLoader = Boolean(loader) && loader !== 'vanilla'
+  const wanted = withLoader ? `${version}-${loader}` : version
+  const pool = state.versions.filter((item) => item.installed || item.local)
+  const exact = pool.find((item) => item.id === wanted)
+  if (exact) return exact
+  // 原版只认精确 id，否则 1.21.11-fabric-x 会被当成原版实例
+  if (!withLoader) return null
+  return pool.find((item) => String(item.id).startsWith(`${wanted}-`)) || null
+}
+
 function getModTarget() {
   const activeId = getActiveVersion()
   // 本地实例（含加载器派生版本）的"游戏版本"取 id 前缀：
@@ -2190,15 +2205,22 @@ function getModTarget() {
   // 用户可以在下载页手动指定筛选版本与加载器，不再强制跟随主界面当前版本。
   const version = state.mods.gameVersion || activeBase
   const loader = state.mods.loader || state.settings?.loader || 'vanilla'
-  // 「当前使用版本」跟着版本隔离设置走：开了隔离就装进该实例自己的 mods
-  //（游戏真正会读的位置，下载完直接生效），没开隔离就装到游戏根目录的 mods。
+  // 「自动」安装目标：用上面选的游戏版本 + 加载器去找对应实例（1.21.11 + fabric →
+  // 1.21.11-fabric-x），把文件装进它自己的 mods。
+  // 注意只有开启版本隔离时游戏才读 versions/<id>/mods；隔离关着时游戏读公共 mods，
+  // 这时候硬装进实例目录等于白装，所以退回公共目录并在界面上说明。
   const isolationOn = Boolean(state.settings?.versionIsolation)
+  const matched = findContentInstance(version, loader)
+  const autoTarget = isolationOn ? (matched?.id || activeId) : ''
   return {
     version,
     loader,
     supported: Boolean(version),
     key: `${version || ''}|${loader}`,
-    targetVersionId: state.mods.installTarget || (isolationOn ? activeId : ''),
+    isolationOn,
+    activeId,
+    matchedInstance: matched ? matched.id : '',
+    targetVersionId: state.mods.installTarget || autoTarget,
     projectType: state.mods.projectType || 'mod',
     saveDir: state.modSaveDir || ''
   }
@@ -2241,13 +2263,28 @@ function updateModsTargetUI(target) {
   dom.modsGameVersion.textContent = target.version || '—'
   dom.modsLoaderName.textContent = loaderLabel
   dom.modsTargetLabel.textContent = target.version ? `${target.version} · ${loaderLabel}` : '未选择版本'
-  const saveDir = state.modSaveDir || state.appInfo?.modsDir || ''
+
+  // 真实落盘目录：实例目标 → versions/<id>/<mods|resourcepacks|shaderpacks>，
+  // 否则 → 公共 gameDir/<...>
+  const folder =
+    target.projectType === 'resourcepack'
+      ? 'resourcepacks'
+      : target.projectType === 'shader'
+        ? 'shaderpacks'
+        : 'mods'
+  let saveDir = ''
+  if (state.modSaveDir) {
+    saveDir = state.modSaveDir
+  } else if (target.targetVersionId) {
+    saveDir = `${state.appInfo?.versionsDir || ''}\\${target.targetVersionId}\\${folder}`
+  } else {
+    saveDir = state.appInfo?.modsDir || ''
+  }
   dom.modsFolderPath.textContent = saveDir || '—'
   dom.modsFolderPath.title = saveDir || ''
+
   if (dom.modsDirHint) {
-    dom.modsDirHint.textContent = state.modSaveDir
-      ? '下载的模组会保存到上面选择的文件夹；下载时仍可再次更改。'
-      : '下载每个模组时都会弹出文件夹选择框，默认从游戏目录开始。'
+    dom.modsDirHint.textContent = modTargetHint(target, folder, loaderLabel)
   }
   dom.modSearchInput.disabled = !target.supported
   dom.modSearchBtn.disabled = !target.supported
@@ -2263,6 +2300,24 @@ function updateModsTargetUI(target) {
     dom.modsCompatTitle.textContent = '当前实例没有模组加载器'
     dom.modsCompatText.textContent = `原版 Minecraft ${target.version} 无法加载模组，请先在版本库选择 Fabric、Quilt、Forge 或 NeoForge。`
   }
+}
+
+/** 说明文件到底会落到哪个目录，以及为什么。 */
+function modTargetHint(target, folder, loaderLabel) {
+  if (!target.supported) return '请先选择要安装到的游戏版本。'
+  if (state.modSaveDir) {
+    return '下载的内容会保存到上面选择的文件夹；下载时仍可再次更改。'
+  }
+  if (state.mods.installTarget) {
+    return `已手动指定实例：文件会装进 ${state.mods.installTarget} 自己的 ${folder} 目录。`
+  }
+  if (target.isolationOn) {
+    if (target.matchedInstance) {
+      return `已按 ${target.version} + ${loaderLabel} 匹配到实例 ${target.matchedInstance}，文件会装进它的 ${folder} 目录。`
+    }
+    return `本机还没有 ${target.version} 对应的 ${loaderLabel} 实例，暂时装进当前使用版本 ${target.activeId || '—'}；建议先去版本库为该版本安装加载器。`
+  }
+  return `版本隔离未开启，所有版本共用上面这个 ${folder} 文件夹。想让每个版本用各自的 ${folder}，请到 设置 → 启动 开启「版本隔离」。`
 }
 
 function renderModsNoLoader(target) {
