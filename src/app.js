@@ -282,7 +282,8 @@ function bindHome() {
   dom.launchButton.addEventListener('click', handleLaunch)
   dom.cancelLaunch.addEventListener('click', handleCancelLaunch)
   dom.hudCancel.addEventListener('click', handleCancelLaunch)
-  dom.homeRefresh.addEventListener('click', () => loadVersions(true))
+  // 首页顶部的同步条已移除，这里保持可选，避免元素不存在时抛错
+  if (dom.homeRefresh) dom.homeRefresh.addEventListener('click', () => loadVersions(true))
   dom.versionsRefresh.addEventListener('click', () => loadVersions(true))
   dom.openGameFolder.addEventListener('click', () => openPath('game'))
   dom.openVersionsFolder.addEventListener('click', () => openPath('versions'))
@@ -929,21 +930,20 @@ async function loadVersions(force = false) {
 }
 
 function setRefreshing(refreshing) {
-  dom.homeRefresh.disabled = refreshing
-  dom.versionsRefresh.disabled = refreshing
-  if (refreshing) {
-    dom.homeRefresh.classList.add('is-spinning')
-    dom.versionsRefresh.classList.add('is-spinning')
-  } else {
-    dom.homeRefresh.classList.remove('is-spinning')
-    dom.versionsRefresh.classList.remove('is-spinning')
+  if (dom.homeRefresh) {
+    dom.homeRefresh.disabled = refreshing
+    dom.homeRefresh.classList.toggle('is-spinning', refreshing)
   }
+  dom.versionsRefresh.disabled = refreshing
+  dom.versionsRefresh.classList.toggle('is-spinning', refreshing)
 }
 
 function setSync(kind, text) {
   state.syncText = text
+  if (!dom.syncText || !dom.syncChip) return
   dom.syncText.textContent = text
   const dot = dom.syncChip.querySelector('.status-dot')
+  if (!dot) return
   dot.className = 'status-dot'
   if (kind === 'loading') dot.classList.add('busy')
   if (kind === 'warn') dot.classList.add('warn')
@@ -960,7 +960,9 @@ function updateSyncChip() {
   } else {
     setSync('ok', '版本清单已同步')
   }
-  dom.syncChip.title = state.versionsError ? `最近一次同步错误：${state.versionsError}` : ''
+  if (dom.syncChip) {
+    dom.syncChip.title = state.versionsError ? `最近一次同步错误：${state.versionsError}` : ''
+  }
 }
 
 function getFilteredVersions() {
@@ -1174,8 +1176,11 @@ function updateVersionDetail() {
   const meta = version.local
     ? { label: '本地', className: 'local' }
     : TYPE_META[version.type] || { label: version.type, className: 'release' }
-  dom.detailType.className = `type-pill ${meta.className}`
-  dom.detailType.textContent = meta.label
+  // 详情面板的封面大图已移除，类型标签随之不存在
+  if (dom.detailType) {
+    dom.detailType.className = `type-pill ${meta.className}`
+    dom.detailType.textContent = meta.label
+  }
   dom.detailVersion.textContent = version.id
   dom.detailInstalled.hidden = !version.installed
   dom.detailDate.textContent = version.local

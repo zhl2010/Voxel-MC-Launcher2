@@ -215,23 +215,7 @@
       </aside>
 
       <main class="main" id="mainScroll">
-        <section class="page active" data-page-panel="home" aria-labelledby="homeHeading">
-          <header class="page-head">
-            <div>
-              <p class="eyebrow"><span class="eyebrow-line"></span>你的方块世界，随时待命</p>
-              <h1 id="homeHeading">准备好，<br /><em>再次出发。</em></h1>
-            </div>
-            <div class="head-actions">
-              <div id="syncChip" class="sync-chip">
-                <span class="status-dot"></span>
-                <span id="syncText">正在同步版本清单</span>
-              </div>
-              <button id="homeRefresh" class="ghost-btn square" aria-label="刷新版本清单" title="刷新版本清单">
-                <svg><use href="#i-refresh"></use></svg>
-              </button>
-            </div>
-          </header>
-
+        <section class="page active" data-page-panel="home">
           <div class="home-layout">
             <article class="hero-card">
               <div class="hero-art" aria-hidden="true">
@@ -362,14 +346,6 @@
                 <div class="skeleton-row"></div>
               </div>
             </article>
-
-            <article class="info-card note-card">
-              <span class="note-mark">“</span>
-              <span class="info-icon soft"><svg><use href="#i-spark"></use></svg></span>
-              <h3>给冒险者的小提示</h3>
-              <p>首次启动会自动下载对应版本的 Java 和游戏资源，所需时间取决于网络速度。下载一次后，下次启动会快很多。</p>
-              <button class="text-btn" data-page="logs">查看运行日志<svg><use href="#i-chevron"></use></svg></button>
-            </article>
           </div>
         </section>
 
@@ -378,7 +354,6 @@
             <div>
               <p class="eyebrow"><span class="eyebrow-line"></span>VERSION LIBRARY</p>
               <h1 id="versionsHeading">版本库</h1>
-              <p class="page-subtitle">从最新正式版到远古快照，选择一个世界开始探索。</p>
             </div>
             <div class="head-actions">
               <button id="versionsRefresh" class="ghost-btn">
@@ -418,15 +393,6 @@
             </section>
 
             <aside class="version-detail panel">
-              <div class="detail-art" aria-hidden="true">
-                <div class="detail-grid"></div>
-                <div class="detail-cube">
-                  <span class="cube-top"></span>
-                  <span class="cube-left"></span>
-                  <span class="cube-right"></span>
-                </div>
-                <span id="detailType" class="type-pill release">正式版</span>
-              </div>
               <div class="detail-heading">
                 <div>
                   <span class="detail-caption">MINECRAFT JAVA EDITION</span>
