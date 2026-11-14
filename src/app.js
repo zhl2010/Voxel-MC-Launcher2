@@ -640,7 +640,7 @@ function renderVerifyButton() {
   }
   dom.verifyVersion.disabled = false
   dom.verifyVersion.dataset.state = 'idle'
-  dom.verifyVersion.textContent = verifying ? `校验中（${verifying}）` : '校验并修补游戏文件'
+  dom.verifyVersion.textContent = verifying ? `校验中（${verifying}）` : '重新下载 / 校验文件'
   dom.verifyVersion.title = verifying ? `正在校验 ${verifying}，请等待其完成` : ''
 }
 
@@ -1723,20 +1723,10 @@ function updateVersionDetail() {
 
   // 只有"已安装"的版本才能被选中使用；未安装的只能先下载。
   // 本地实例恒为已安装（installed=true），官方版本要看本机 versions/ 里有没有。
-  // 下载按钮始终可用：无论这个版本装没装、是不是本地实例，都应该能再次下载/校验补齐。
-  //
-  // 这样做是为了支持"同一版本装多个加载器"——用户在版本下载页点一次原版、
-  // 再点一次 Fabric / Forge，会各自生成独立的实例目录，互不覆盖。
-  // 所以这里不表达"选择"语义，也不因为已安装就隐藏按钮。
-  if (dom.downloadVersion) {
-    dom.downloadVersion.hidden = false
-    dom.downloadVersion.disabled = false
-    dom.downloadVersion.textContent = version.local || version.installed
-      ? '重新下载 / 校验'
-      : '下载此版本'
-  }
-
-  // 「使用此版本」只对已安装的版本有意义；离线/未安装的版本不能拿来启动
+  // 版面规则：
+  //   已安装 → 主按钮是「使用此版本」；「重新下载 / 校验」作为次要按钮放在它下方
+  //   未安装 → 主按钮位置换成「下载此版本」，没有「使用」
+  // 下载和校验是同一个后端动作，所以不存在两个重复的按钮。
   const installed = Boolean(version.installed || version.local)
   if (installed) {
     dom.applyVersion.hidden = false
@@ -1745,6 +1735,12 @@ function updateVersionDetail() {
   } else {
     dom.applyVersion.hidden = true
     dom.applyVersion.disabled = true
+  }
+
+  if (dom.downloadVersion) {
+    dom.downloadVersion.hidden = installed
+    dom.downloadVersion.disabled = false
+    dom.downloadVersion.textContent = '下载此版本'
   }
 }
 
@@ -3518,6 +3514,16 @@ async function headFromSkinUrl(url) {
 }
 
 /**
+ * 上传皮肤只对在线账户（Microsoft / Yggdrasil）有意义——
+ * 离线账户的皮肤不会在游戏里生效，只能选内置的 Steve / Alex。
+ */
+function updateSkinActionsVisibility() {
+  if (!dom.uploadSkin) return
+  const online = Boolean(state.account && state.account.type !== 'crack')
+  dom.uploadSkin.hidden = !online
+}
+
+/**
  * 皮肤模型选择：Steve（经典 4px 手臂）或 Alex（纤细 3px 手臂）。
  *
  * 没用自定义皮肤时，头像直接用内嵌的同款默认皮肤；选中的模型会写进账户元数据，
@@ -3595,6 +3601,7 @@ async function loadSkin() {
   }
   renderAccount()
   if (dom.clearSkin) dom.clearSkin.hidden = !state.skinDataUrl
+  updateSkinActionsVisibility()
 }
 
 /** 给 Promise 套一个超时，超时后 reject。 */

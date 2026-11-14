@@ -655,7 +655,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     bridge->Register("versions_set_icon", [&](const nlohmann::json& args) {
         const std::string id = args.value("versionId", std::string());
         if (!voxel::SafeVersionId(id)) throw std::runtime_error("版本名非法");
-        const std::wstring file = voxel::PickPngFile(window.Handle());
+        const std::wstring file = voxel::PickIconFile(window.Handle());
         if (file.empty()) return nlohmann::json{{"cancelled", true}};
         const std::string bytes = voxel::fs::ReadText(file);
         std::string error;

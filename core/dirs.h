@@ -31,4 +31,7 @@ std::wstring PickFolder(HWND owner, const std::wstring& initial);
 std::wstring PickJavaFile(HWND owner);
 std::wstring PickPngFile(HWND owner);
 
+// 选择版本自定义图标（PNG）
+std::wstring PickIconFile(HWND owner);
+
 }  // namespace voxel

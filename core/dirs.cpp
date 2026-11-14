@@ -352,4 +352,9 @@ std::wstring PickPngFile(HWND owner) {
     return PickFile(owner, L"选择皮肤图片", L"PNG 图片 (*.png)\0*.png\0", std::wstring());
 }
 
+std::wstring PickIconFile(HWND owner) {
+    // 版本自定义图标：同样是 PNG，但对话框标题要说清楚是图标不是皮肤
+    return PickFile(owner, L"选择版本图标（PNG）", L"PNG 图片 (*.png)\0*.png\0", std::wstring());
+}
+
 }  // namespace voxel

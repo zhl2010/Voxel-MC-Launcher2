@@ -433,13 +433,15 @@
               </div>
 
               <button id="applyVersion" class="primary-btn" disabled>选择一个版本</button>
-              <!-- 未安装的版本走这里下载；已安装时隐藏 -->
-              <button id="downloadVersion" class="primary-btn" hidden>下载此版本</button>
+              <!-- 下载 / 校验是同一个后端动作（补齐缺失并校验），合成一个按钮，
+                   不再和「使用此版本」抢同一处版面 -->
+              <button id="downloadVersion" class="ghost-btn full" hidden>下载此版本</button>
               <div id="downloadProgress" class="version-download-progress" hidden>
                 <div class="version-download-bar"><i id="downloadBarFill"></i></div>
                 <span id="downloadProgressText">准备下载…</span>
               </div>
-              <button id="verifyVersion" class="ghost-btn full">校验并修补游戏文件</button>
+              <!-- 已安装的版本也允许重新下载：补齐缺失 / 修正损坏 -->
+              <button id="verifyVersion" class="ghost-btn full">重新下载 / 校验文件</button>
               <div class="detail-action-row">
                 <button id="openVersionFolder" class="ghost-btn half">打开该版本文件夹</button>
                 <button id="deleteVersion" class="ghost-btn half danger">删除此版本</button>
@@ -1004,7 +1006,8 @@
             </button>
           </div>
           <div class="skin-actions">
-            <button id="uploadSkin" type="button" class="ghost-btn small">上传皮肤（64×64 PNG）</button>
+            <!-- 上传自己是正版/外置账户的能力；离线账户只需在 Steve / Alex 之间选 -->
+            <button id="uploadSkin" type="button" class="ghost-btn small" hidden>上传皮肤（64×64 PNG）</button>
             <button id="clearSkin" type="button" class="ghost-btn small" hidden>恢复默认皮肤</button>
             <span id="skinFeedback" class="directory-feedback" role="status"></span>
           </div>
