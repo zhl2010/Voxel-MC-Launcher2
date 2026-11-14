@@ -10,12 +10,24 @@
 namespace voxel {
 namespace {
 
+// UUID 只可能是 hex + 连字符。外置登录服务器的响应会直接被拼进皮肤文件名，
+// 带 ../ 之类的段就能把文件写到任意路径，先验再拼。
+bool SafeUuid(const std::string& uuid) {
+    if (uuid.empty() || uuid.size() > 36) return false;
+    for (char ch : uuid) {
+        const bool ok = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') ||
+                        (ch >= 'A' && ch <= 'F') || ch == '-';
+        if (!ok) return false;
+    }
+    return true;
+}
+
 std::wstring SessionFile() { return fs::Join(UserDataDir(), L"account-session.json"); }
 
 std::wstring SkinFile() {
     // 皮肤跟随当前账户目录：登出后不再显示别人的皮肤
     Account current;
-    if (!LoadAccount(current) || current.uuid.empty()) return std::wstring();
+    if (!LoadAccount(current) || !SafeUuid(current.uuid)) return std::wstring();
     return fs::Join(fs::Join(UserDataDir(), L"skins"), Utf8ToWide(current.uuid) + L".png");
 }
 
@@ -154,6 +166,10 @@ bool ApplySkin(const std::wstring& pngPath, std::string* error) {
     }
 
     const std::wstring dir = fs::Join(UserDataDir(), L"skins");
+    if (!SafeUuid(account.uuid)) {
+        if (error) *error = "账户 UUID 异常，无法保存皮肤";
+        return false;
+    }
     const std::wstring dest = fs::Join(dir, Utf8ToWide(account.uuid) + L".png");
     if (!fs::WriteText(dest, bytes)) {
         if (error) *error = "皮肤保存失败";
@@ -173,7 +189,7 @@ namespace {
 // 皮肤模型与账户绑定：跟着 uuid 存，换账户互不影响
 std::wstring SkinModelFile() {
     Account current;
-    if (!LoadAccount(current) || current.uuid.empty()) {
+    if (!LoadAccount(current) || !SafeUuid(current.uuid)) {
         return fs::Join(UserDataDir(), L"skin-model.txt");
     }
     return fs::Join(fs::Join(UserDataDir(), L"skins"),
