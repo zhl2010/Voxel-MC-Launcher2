@@ -242,7 +242,7 @@ bool WebViewHost::CreateInternal(HWND parent,
             if (url.rfind(L"https://", 0) == 0 || url.rfind(L"http://", 0) == 0) {
                 ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             }
-            args->put_Handled(TRUE);
+            args->put_Cancel(TRUE);
             return S_OK;
         });
     if (navHandler_) web_->add_NavigationStarting(navHandler_.Get(), &navToken_);
