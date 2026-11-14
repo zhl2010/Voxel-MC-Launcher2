@@ -522,9 +522,16 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     });
 
     bridge->Register("skin_get", [&](const nlohmann::json&) {
-        const std::string data = voxel::SkinDataUrl();
-        if (data.empty()) return nlohmann::json(nullptr);
-        return nlohmann::json(data);
+        // 返回完整信息：自定义皮肤 + 当前模型（steve / alex）
+        return voxel::SkinInfo();
+    });
+
+    bridge->Register("skin_set_model", [&](const nlohmann::json& args) {
+        const std::string model = args.value("model", std::string());
+        if (!voxel::SetSkinModel(model)) {
+            throw std::runtime_error("皮肤模型只能是 steve 或 alex");
+        }
+        return voxel::SkinInfo();
     });
 
     bridge->Register("skin_face", [&](const nlohmann::json&) {

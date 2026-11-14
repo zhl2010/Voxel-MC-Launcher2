@@ -33,6 +33,13 @@ std::string SkinDataUrl();
 bool ApplySkin(const std::wstring& pngPath, std::string* error);
 void ClearSkin();
 
+// 皮肤模型：steve（经典，4px 手臂）或 alex（纤细，3px 手臂）。
+// 用户没用自定义皮肤时，启动器用内嵌的对应默认皮肤；选中的模型也写盘，
+// 供以后接入 authlib-injector 之类的代理时决定游戏内用哪个手臂模型。
+std::string SkinModel();                    // 返回 "steve" / "alex"
+bool SetSkinModel(const std::string& model); // 只接受这两个值
+nlohmann::json SkinInfo();                   // { model, custom(bool), dataUrl }
+
 // 用户名校验：3–16 位字母/数字/下划线（与前端一致）
 bool ValidOfflineName(const std::string& name);
 

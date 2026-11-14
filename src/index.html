@@ -991,10 +991,23 @@
           <span id="modalAuthBadge" class="auth-badge" hidden>离线</span>
         </div>
 
-        <div class="skin-actions">
-          <button id="uploadSkin" type="button" class="ghost-btn small">上传皮肤（64×64 PNG）</button>
-          <button id="clearSkin" type="button" class="ghost-btn small" hidden>恢复默认头像</button>
-          <span id="skinFeedback" class="directory-feedback" role="status"></span>
+        <div class="skin-panel">
+          <div class="skin-presets">
+            <span class="skin-presets-label">皮肤模型</span>
+            <button type="button" class="skin-preset active" data-skin-preset="steve" title="Steve 经典模型（4 像素手臂）">
+              <span class="skin-preset-face" data-skin-face="steve"></span>
+              <span class="skin-preset-name">Steve</span>
+            </button>
+            <button type="button" class="skin-preset" data-skin-preset="alex" title="Alex 纤细模型（3 像素手臂）">
+              <span class="skin-preset-face" data-skin-face="alex"></span>
+              <span class="skin-preset-name">Alex</span>
+            </button>
+          </div>
+          <div class="skin-actions">
+            <button id="uploadSkin" type="button" class="ghost-btn small">上传皮肤（64×64 PNG）</button>
+            <button id="clearSkin" type="button" class="ghost-btn small" hidden>恢复默认皮肤</button>
+            <span id="skinFeedback" class="directory-feedback" role="status"></span>
+          </div>
         </div>
 
         <div class="auth-tabs" role="tablist" aria-label="登录方式">

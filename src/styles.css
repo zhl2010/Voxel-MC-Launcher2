@@ -9390,3 +9390,67 @@ html[data-theme="light"] .directory-row .text-btn:hover {
   object-fit: cover;
   border-radius: 3px;
 }
+
+/* ===== 皮肤模型选择 ===== */
+
+.skin-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.skin-presets {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.skin-presets-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-2, #6f736f);
+  margin-right: 2px;
+}
+
+.skin-preset {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px 5px 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-soft, var(--accent));
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.14s, background 0.14s;
+}
+
+.skin-preset:hover {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.skin-preset.active {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.09);
+  font-weight: 600;
+}
+
+.skin-preset-face {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.skin-preset-face canvas {
+  width: 26px;
+  height: 26px;
+  image-rendering: pixelated;
+}

@@ -16,3 +16,7 @@
 // 编号 1 是 ICON 资源的最低 ID，任务栏/资源管理器都认这个。
 1 ICON "assets\\icon.ico"
 105 RCDATA "assets\\icon.png"
+
+// 默认皮肤：用户没上传时随机二选一，头像从这两张里裁头部
+106 RCDATA "assets\\skin-steve.png"
+107 RCDATA "assets\\skin-alex.png"

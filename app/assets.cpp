@@ -18,6 +18,9 @@ const AssetEntry kAssets[] = {
     {104, L"voxel-api.js", L"application/javascript; charset=utf-8"},
     // 应用图标：界面里当 logo 用，和 exe 图标是同一张图
     {105, L"icon.png", L"image/png"},
+    // 默认皮肤（史蒂夫 / 爱丽克丝），没上传皮肤时随机挑一张裁头像
+    {106, L"skin-steve.png", L"image/png"},
+    {107, L"skin-alex.png", L"image/png"},
 };
 
 bool LoadResourceBytes(int id, std::vector<unsigned char>& data) {

@@ -297,6 +297,9 @@
     getSkin: function () {
       return call('skin_get')
     },
+    setSkinModel: function (model) {
+      return call('skin_set_model', { model: model })
+    },
     getAccountFace: function () {
       return call('skin_face')
     },

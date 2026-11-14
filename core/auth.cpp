@@ -154,4 +154,43 @@ void ClearSkin() {
     DeleteFileW(file.c_str());
 }
 
+namespace {
+
+// 皮肤模型与账户绑定：跟着 uuid 存，换账户互不影响
+std::wstring SkinModelFile() {
+    Account current;
+    if (!LoadAccount(current) || current.uuid.empty()) {
+        return fs::Join(UserDataDir(), L"skin-model.txt");
+    }
+    return fs::Join(fs::Join(UserDataDir(), L"skins"),
+                    Utf8ToWide(current.uuid) + L".model");
+}
+
+}  // namespace
+
+std::string SkinModel() {
+    const std::string raw = fs::ReadText(SkinModelFile());
+    std::string trimmed;
+    for (char ch : raw) {
+        if (ch != '\r' && ch != '\n' && ch != ' ' && ch != '\t') trimmed.push_back(ch);
+    }
+    return trimmed == "alex" ? "alex" : "steve";
+}
+
+bool SetSkinModel(const std::string& model) {
+    if (model != "steve" && model != "alex") return false;
+    const std::wstring path = SkinModelFile();
+    fs::EnsureDir(fs::ParentDir(path));
+    return fs::WriteTextAtomic(path, model);
+}
+
+nlohmann::json SkinInfo() {
+    const std::string data = SkinDataUrl();
+    return nlohmann::json{
+        {"model", SkinModel()},
+        {"custom", !data.empty()},
+        {"dataUrl", data},
+    };
+}
+
 }  // namespace voxel

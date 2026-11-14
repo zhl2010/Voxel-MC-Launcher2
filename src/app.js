@@ -253,6 +253,8 @@ state.skinDataUrl = state.skinDataUrl || ''
 // Face of the online player (Microsoft / Yggdrasil) fetched by the main process; empty when the
 // account has no accessible skin or the player is offline.
 state.onlineFace = ''
+// 皮肤模型：steve（经典）/ alex（纤细）。没自定义皮肤时决定用哪张默认皮肤。
+state.skinModel = 'steve'
 const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric',
   month: '2-digit',
@@ -299,6 +301,7 @@ async function init() {
     applySettingsToUI()
     renderAccount()
     // Fetch the uploaded skin before the first paint of the avatars so the lobby shows the real head.
+    preloadSkinImages()
     await loadSkin().catch(() => {})
     updateSettingsMeta()
     updateStaticInfo()
@@ -918,6 +921,9 @@ function saveNumberField(input, key, min, max) {
 function bindAccount() {
   dom.closeAccountModal.addEventListener('click', closeAccountModal)
   dom.uploadSkin.addEventListener('click', handleUploadSkin)
+  document.querySelectorAll('[data-skin-preset]').forEach((button) => {
+    button.addEventListener('click', () => chooseSkinModel(button.dataset.skinPreset))
+  })
   dom.clearSkin.addEventListener('click', handleClearSkin)
   dom.accountModal.addEventListener('click', (event) => {
     if (event.target === dom.accountModal) closeAccountModal()
@@ -3165,10 +3171,10 @@ function renderAccount() {
   dom.usernameInput.value = account?.type === 'crack' ? account.name : state.settings?.username || ''
 
   const seed = account?.uuid || account?.name || 'voxel-guest'
-  applyAvatar(dom.homeAvatar, seed)
-  applyAvatar(dom.sideAvatar, seed)
-  applyAvatar(dom.settingsAvatar, seed)
-  applyAvatar(dom.modalAvatar, seed)
+  // applyAvatar 现在要异步解码内嵌默认皮肤；失败时静默，不影响其它界面元素
+  for (const element of [dom.homeAvatar, dom.sideAvatar, dom.settingsAvatar, dom.modalAvatar]) {
+    applyAvatar(element, seed).catch(() => {})
+  }
   updateTitlebarStatus()
   updateHomeVersion()
 }
@@ -3229,6 +3235,8 @@ function accountShortText(account) {
 
 function openAccountModal() {
   dom.accountModal.hidden = false
+  // 面板是 display:none 时 canvas 画出来是空白的，所以每次打开都重画一次皮肤预览
+  renderSkinPresets()
   dom.loginError.hidden = true
   dom.loginError.textContent = ''
   dom.modalAuthBadge.hidden = !state.account
@@ -3385,26 +3393,98 @@ function showLoginError(message) {
   dom.loginError.textContent = message
 }
 
-function applyAvatar(element, seed) {
+async function applyAvatar(element, seed) {
   if (!element) return
-  // Uploaded skin always wins, then the online player face (Microsoft / Yggdrasil), then the
-  // generated pixel avatar.
+  // 优先级：上传的皮肤 > 在线头像（Microsoft / Yggdrasil）> 默认皮肤裁出的头部
   const key = String(seed || 'voxel-guest')
-  const dataUrl =
-    state.skinDataUrl ||
-    state.onlineFace ||
-    (avatarCache.has(key) ? avatarCache.get(key) : createAvatarDataUrl(key))
-  if (!state.skinDataUrl && !state.onlineFace && !avatarCache.has(key)) avatarCache.set(key, dataUrl)
-  element.style.backgroundImage = `url("${dataUrl}")`
+
+  const direct = state.skinDataUrl || state.onlineFace
+  if (direct) {
+    element.style.backgroundImage = `url("${direct}")`
+    return
+  }
+
+  if (avatarCache.has(key)) {
+    element.style.backgroundImage = `url("${avatarCache.get(key)}")`
+    return
+  }
+
+  // 首次需要解码内嵌皮肤图，是异步的；先给个占位避免闪空
+  element.style.backgroundImage = 'none'
+  const dataUrl = await createAvatarDataUrl(key)
+  avatarCache.set(key, dataUrl)
+  if (element.isConnected) element.style.backgroundImage = `url("${dataUrl}")`
+}
+
+/**
+ * 皮肤模型选择：Steve（经典 4px 手臂）或 Alex（纤细 3px 手臂）。
+ *
+ * 没用自定义皮肤时，头像直接用内嵌的同款默认皮肤；选中的模型会写进账户元数据，
+ * 以后接入 authlib-injector 之类的代理时，游戏内就能按这个模型加载。
+ */
+const SKIN_PRESET_LABELS = { steve: 'Steve', alex: 'Alex' }
+
+function renderSkinPresets() {
+  const model = state.skinModel === 'alex' ? 'alex' : 'steve'
+  document.querySelectorAll('[data-skin-preset]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.skinPreset === model)
+  })
+  // 两个按钮里各画一张头部预览。图片可能还没解码完，所以每次都以当前缓存重画，
+  // 不能靠 dataset 标记跳过——否则先渲染的那次失败后就再也不会更新了。
+  document.querySelectorAll('[data-skin-face]').forEach((holder) => {
+    const name = holder.dataset.skinFace
+    const canvas = drawSkinHead(name === 'alex' ? 'skin-alex.png' : 'skin-steve.png')
+    holder.replaceChildren(canvas)
+  })
+}
+
+/** 从皮肤图裁 8×8 头部放大成 32×32 的 canvas（给预览用，同步画不阻塞）。 */
+function drawSkinHead(assetName, size = 32) {
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  ctx.imageSmoothingEnabled = false
+  ctx.fillStyle = '#3a3d3a'
+  ctx.fillRect(0, 0, size, size)
+
+  const img = skinImageCache.get(assetName)
+  if (img) {
+    ctx.drawImage(img, 8, 8, 8, 8, 0, 0, size, size)
+    if (img.height >= 16) ctx.drawImage(img, 40, 8, 8, 8, 0, 0, size, size)
+  }
+  return canvas
+}
+
+async function chooseSkinModel(model) {
+  if (model !== 'steve' && model !== 'alex') return
+  try {
+    const info = await invoke(api.setSkinModel(model))
+    state.skinModel = info?.model === 'alex' ? 'alex' : 'steve'
+    // 换模型后，没自定义皮肤时头像也跟着换
+    if (!state.skinDataUrl) {
+      for (const [key] of avatarCache) avatarCache.delete(key)
+    }
+    renderSkinPresets()
+    renderAccount()
+    setSkinFeedback(`已切换到 ${SKIN_PRESET_LABELS[state.skinModel]} 模型`, 'ok')
+  } catch (error) {
+    setSkinFeedback(error.message, 'error')
+  }
 }
 
 /** Load the uploaded skin (if any) and the online player face, then refresh every avatar. */
 async function loadSkin() {
   try {
-    state.skinDataUrl = (await invoke(api.getSkin())) || ''
+    const info = await invoke(api.getSkin())
+    // 后端返回 { model, custom, dataUrl }；自定义皮肤为空时由前端用内嵌默认皮肤
+    state.skinDataUrl = info?.custom ? info.dataUrl || '' : ''
+    state.skinModel = info?.model === 'alex' ? 'alex' : 'steve'
   } catch {
     state.skinDataUrl = ''
+    state.skinModel = 'steve'
   }
+  renderSkinPresets()
   try {
     state.onlineFace = (await invoke(api.getAccountFace())) || ''
   } catch {
@@ -3455,54 +3535,81 @@ async function handleClearSkin() {
   }
 }
 
-function createAvatarDataUrl(seed) {
-  const canvas = document.createElement('canvas')
-  canvas.width = 8
-  canvas.height = 8
-  const ctx = canvas.getContext('2d')
-  const hash = hashString(seed)
-  const palettes = [
-    { hair: '#1b1c1a', skin: '#d6d8d1', shirt: '#40433f', eye: '#0c0d0c' },
-    { hair: '#2a2c29', skin: '#babdb6', shirt: '#555954', eye: '#111211' },
-    { hair: '#4b4d49', skin: '#e4e5e0', shirt: '#6b6f69', eye: '#202220' },
-    { hair: '#73766f', skin: '#c7cac3', shirt: '#343733', eye: '#0f100f' },
-    { hair: '#242624', skin: '#999d96', shirt: '#5e625c', eye: '#0a0b0a' },
-    { hair: '#5c5f59', skin: '#d0d2cc', shirt: '#454945', eye: '#151615' }
-  ]
-  const palette = palettes[hash % palettes.length]
-  const bg = ['#2a2c2a', '#333633', '#3f423e', '#252725', '#484b46'][hash % 5]
+/**
+ * 默认皮肤：用户没上传时用内嵌的史蒂夫 / 爱丽克丝。
+ *
+ * 早期版本按账户名哈希随机二选一，现在改成"跟随用户在账户面板里选的模型"
+ * （state.skinModel）。这样上传皮肤界面里选了哪个，头像就是哪个，行为可预期。
+ */
+const DEFAULT_SKINS = ['skin-steve.png', 'skin-alex.png']
 
-  ctx.fillStyle = bg
-  ctx.fillRect(0, 0, 8, 8)
-  ctx.fillStyle = palette.shirt
-  ctx.fillRect(1, 7, 6, 1)
-  ctx.fillStyle = palette.skin
-  ctx.fillRect(1, 2, 6, 5)
-  ctx.fillRect(0, 3, 1, 3)
-  ctx.fillRect(7, 3, 1, 3)
-  ctx.fillStyle = palette.hair
-  ctx.fillRect(1, 0, 6, 2)
-  ctx.fillRect(0, 1, 1, 2)
-  ctx.fillRect(7, 1, 1, 2)
-  ctx.fillRect(1, 2, 1, 1)
-  ctx.fillRect(6, 2, 1, 1)
+/** 皮肤图 URL（由 exe 内嵌资源提供）与解码后的缓存。 */
+const skinImageCache = new Map()
 
-  const eyeY = 3 + (hash % 2)
-  ctx.fillStyle = '#f2eee3'
-  ctx.fillRect(2, eyeY, 1, 1)
-  ctx.fillRect(5, eyeY, 1, 1)
-  ctx.fillStyle = palette.eye
-  ctx.fillRect(2, eyeY, 1, 1)
-  ctx.fillRect(5, eyeY, 1, 1)
-  ctx.fillRect(5 - (hash % 3 === 0 ? 0 : 1), eyeY + 1, 2, 1)
-  ctx.fillStyle = 'rgba(24, 25, 23, 0.7)'
-  ctx.fillRect(3, 6, 2, 1)
+function defaultSkinName() {
+  return state.skinModel === 'alex' ? 'skin-alex.png' : 'skin-steve.png'
+}
 
-  if (hash % 3 === 0) {
-    ctx.fillStyle = 'rgba(255,255,255,0.62)'
-    ctx.fillRect(1, 2, 1, 1)
+/** 启动时把两张默认皮肤解码进缓存，之后画头像 / 预览都是同步的，不会闪空。 */
+function preloadSkinImages() {
+  for (const name of DEFAULT_SKINS) {
+    if (skinImageCache.has(name)) continue
+    const img = new Image()
+    img.onload = () => {
+      skinImageCache.set(name, img)
+      // 图到位后重画预设预览与头像。所有头像/预览都走 drawSkinHead / createAvatarDataUrl，
+      // 它们只读缓存，所以这里只需触发一次重绘。
+      renderSkinPresets()
+      if (!state.skinDataUrl && !state.onlineFace) renderAccount()
+    }
+    img.onerror = () => {
+      // 记成 null 避免无限重试；drawSkinHead 会退化成纯色块
+      skinImageCache.set(name, null)
+    }
+    img.decoding = 'sync'
+    img.src = name
+  }
+}
+
+/**
+ * 从皮肤图里裁出头部，放大成头像。
+ * 64×64 皮肤的头部 8×8 区域在 (8,8)；老式 64×32 皮肤在 (8,8) 也一样。
+ * 叠一层头盔层（40,8 的 8×8，可能全透明），没有就跳过。
+ */
+async function createAvatarDataUrl(seed) {
+  const name = defaultSkinName()
+
+  // 两张默认皮肤在启动时预加载（见 preloadSkinImages），这里通常直接命中缓存
+  let image = skinImageCache.get(name)
+  if (!image) {
+    image = await new Promise((resolve) => {
+      const img = new Image()
+      img.onload = () => resolve(img)
+      img.onerror = () => resolve(null)
+      img.src = name
+    })
+    skinImageCache.set(name, image)
   }
 
+  const canvas = document.createElement('canvas')
+  canvas.width = 64
+  canvas.height = 64
+  const ctx = canvas.getContext('2d')
+  ctx.imageSmoothingEnabled = false
+
+  // 拿不到图时退回纯色底，至少不是空白
+  if (!image) {
+    ctx.fillStyle = '#3a3d3a'
+    ctx.fillRect(0, 0, 64, 64)
+    return canvas.toDataURL('image/png')
+  }
+
+  // 头（8×8）放大 8 倍铺满
+  ctx.drawImage(image, 8, 8, 8, 8, 0, 0, 64, 64)
+  // 头盔层叠加（有就盖上去，没有也不影响）
+  if (image.height >= 16) {
+    ctx.drawImage(image, 40, 8, 8, 8, 0, 0, 64, 64)
+  }
   return canvas.toDataURL('image/png')
 }
 
