@@ -283,8 +283,8 @@
     getModIcon: function (payload) {
       return call('mods_icon', { payload: payload })
     },
-    getInstalledMods: function () {
-      return call('mods_installed')
+    getInstalledMods: function (versionId) {
+      return call('mods_installed', { versionId: versionId || '' })
     },
 
     /* 账户 */

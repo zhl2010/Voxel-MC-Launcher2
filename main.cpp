@@ -454,10 +454,30 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     bridge->Register("versions_delete", [&](const nlohmann::json& args) {
         const std::string id = args.value("versionId", std::string());
         if (!voxel::SafeVersionId(id)) throw std::runtime_error("版本名非法");
-        const std::wstring dir =
-            voxel::fs::Join(voxel::fs::Join(voxel::ResolveGameDir(Snapshot()), L"versions"),
-                        voxel::Utf8ToWide(id));
+        const std::wstring versionsDir =
+            voxel::fs::Join(voxel::ResolveGameDir(Snapshot()), L"versions");
+        const std::wstring dir = voxel::fs::Join(versionsDir, voxel::Utf8ToWide(id));
         if (!voxel::fs::Exists(dir)) throw std::runtime_error("该版本目录不存在");
+        // 删除前先看有没有实例继承它：实例的 json 只写 inheritsFrom，
+        // 父版本一删，这些实例会全部启动失败，而且用户完全不知道是自己刚删的东西导致的。
+        std::vector<std::wstring> dependents;
+        for (const auto& child : voxel::fs::ListDirs(versionsDir)) {
+            if (child == voxel::Utf8ToWide(id)) continue;
+            const std::string text =
+                voxel::fs::ReadText(voxel::fs::Join(voxel::fs::Join(versionsDir, child), child + L".json"));
+            if (text.empty()) continue;
+            try {
+                const nlohmann::json parsed = nlohmann::json::parse(text);
+                if (parsed.value("inheritsFrom", std::string()) == id) dependents.push_back(child);
+            } catch (const std::exception&) {
+                // 坏掉的 json 不该阻止删除，忽略即可
+            }
+        }
+        if (!dependents.empty()) {
+            throw std::runtime_error("还有 " + std::to_string(dependents.size()) + " 个实例继承自 " +
+                                     id + "（" + voxel::WideToUtf8(dependents.front()) +
+                                     " 等），请先删除这些实例");
+        }
         if (!voxel::fs::DeleteTree(dir)) throw std::runtime_error("删除失败，可能有文件被占用");
         return nlohmann::json{{"ok", true}};
     });
@@ -592,6 +612,11 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
             } else {
                 const std::wstring dir = voxel::Utf8ToWide(raw);
                 if (dir.empty()) throw std::runtime_error("路径无效");
+                // 网络路径（\\主机\共享）会让启动器主动向该主机发起 SMB 连接：
+                // 既可能泄露 Windows 凭据，下载内容也落在别人的机器上，一律拒绝。
+                if (dir.rfind(L"\\\\", 0) == 0 || dir.rfind(L"//", 0) == 0) {
+                    throw std::runtime_error("不支持网络路径，请选择本机文件夹");
+                }
                 if (!voxel::fs::Exists(dir)) {
                     if (!voxel::fs::EnsureDir(dir)) throw std::runtime_error("无法创建该目录");
                 } else if (!voxel::fs::IsDirectory(dir)) {

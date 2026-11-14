@@ -517,6 +517,9 @@ function bindHome() {
   if (dom.contentInstallTarget) {
     dom.contentInstallTarget.addEventListener('change', () => {
       state.mods.installTarget = dom.contentInstallTarget.value
+      // 换了目标目录，「已安装」列表要跟着换，否则会列出另一个目录里的文件
+      state.mods.installed = []
+      loadInstalledMods(true)
       if (typeof updateModsTargetUI === 'function') updateModsTargetUI(getModTarget())
     })
   }
@@ -2187,12 +2190,15 @@ function getModTarget() {
   // 用户可以在下载页手动指定筛选版本与加载器，不再强制跟随主界面当前版本。
   const version = state.mods.gameVersion || activeBase
   const loader = state.mods.loader || state.settings?.loader || 'vanilla'
+  // 「当前使用版本」跟着版本隔离设置走：开了隔离就装进该实例自己的 mods
+  //（游戏真正会读的位置，下载完直接生效），没开隔离就装到游戏根目录的 mods。
+  const isolationOn = Boolean(state.settings?.versionIsolation)
   return {
     version,
     loader,
     supported: Boolean(version),
     key: `${version || ''}|${loader}`,
-    targetVersionId: state.mods.installTarget || '',
+    targetVersionId: state.mods.installTarget || (isolationOn ? activeId : ''),
     projectType: state.mods.projectType || 'mod',
     saveDir: state.modSaveDir || ''
   }
@@ -2682,7 +2688,9 @@ async function installMod(mod, button, target, chosenVersionId = '') {
     toast(
       result.alreadyInstalled
         ? `${result.fileName} 已存在，无需重复下载。`
-        : `已下载 ${result.fileName} → ${result.targetVersionId || '游戏根目录'}`,
+        : `已下载 ${result.fileName} → ${
+            result.isolated ? `实例 ${result.targetVersionId} 的 mods` : 'mods 文件夹'
+          }`,
       'success'
     )
     appendLog('INFO', `已安装模组 ${result.filename}（${mod.title}）到 ${result.directory || ''}。`)
@@ -2707,7 +2715,9 @@ async function loadInstalledMods(force = false) {
   state.mods.installedLoading = true
   if (!state.mods.installed.length) renderInstalledSkeleton()
   try {
-    const list = await invoke(api.getInstalledMods())
+    // 按当前安装目标读同一个目录，装在哪就列哪
+    const target = getModTarget()
+    const list = await invoke(api.getInstalledMods(target.targetVersionId || ''))
     state.mods.installed = Array.isArray(list) ? list : []
     renderInstalledMods()
     if (state.mods.results.length && state.page === 'mods') {

@@ -131,7 +131,8 @@ std::vector<std::string> CollectArguments(const nlohmann::json& entries,
 
 // 清单里的 -cp / -Djava.class.path 必须清掉：类路径由启动器统一生成，
 // 否则命令行里会出现两个 -cp，Java 直接用空的那一个。
-std::vector<std::string> SanitizeJvmArguments(const std::vector<std::string>& input) {
+std::vector<std::string> SanitizeJvmArguments(const std::vector<std::string>& input,
+                                             bool blockAgents = false) {
     std::vector<std::string> out;
     for (size_t index = 0; index < input.size(); ++index) {
         const std::string value = input[index];
@@ -143,6 +144,15 @@ std::vector<std::string> SanitizeJvmArguments(const std::vector<std::string>& in
         if (value.rfind("-cp=", 0) == 0 || value.rfind("-classpath=", 0) == 0) continue;
         if (value.rfind("-Djava.class.path", 0) == 0) continue;
         if (value.find("${") != std::string::npos) continue;
+        // 版本 json 是外部内容：-javaagent / -agentlib / -Xbootclasspath 都能让 JVM
+        // 在启动时加载任意本地代码，等于把「下载了一个版本」变成「执行了别人的程序」。
+        // 用户自己在设置里填的 JVM 参数不受这条限制。
+        if (blockAgents && (value.rfind("-javaagent", 0) == 0 ||
+                            value.rfind("-agentlib", 0) == 0 ||
+                            value.rfind("-agentpath", 0) == 0 ||
+                            value.rfind("-Xbootclasspath", 0) == 0)) {
+            continue;
+        }
         out.push_back(value);
     }
     return out;
@@ -330,7 +340,7 @@ BuiltArguments BuildArguments(const ResolvedVersion& version, const nlohmann::js
     }
     if (gameRaw.empty()) built.notes.push_back(L"版本 JSON 没有游戏参数");
 
-    const std::vector<std::string> cleanJvm = SanitizeJvmArguments(jvmRaw);
+    const std::vector<std::string> cleanJvm = SanitizeJvmArguments(jvmRaw, /*blockAgents=*/true);
     const std::string mainClass = manifest.value("mainClass", std::string("net.minecraft.client.main.Main"));
     const std::vector<std::string> cleanGame = SanitizeGameArguments(gameRaw, mainClass);
 

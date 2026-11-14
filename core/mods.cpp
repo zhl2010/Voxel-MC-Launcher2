@@ -98,6 +98,15 @@ const nlohmann::json* PrimaryFile(const nlohmann::json& version) {
 
 // 落盘目录：给出 targetVersionId 时优先用实例自己的目录。
 // 原版实例没有独立 mods 概念的话也允许，行为与 PCL 一致（各实例独立）。
+// 只取 URL 的 host 部分，避免 "https://evil.com/?x=cdn.modrinth.com" 这种子串骗过白名单
+std::string HostOf(const std::string& url) {
+    const size_t scheme = url.find("://");
+    if (scheme == std::string::npos) return std::string();
+    const size_t begin = scheme + 3;
+    const size_t end = url.find_first_of("/?#", begin);
+    return url.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+}
+
 std::wstring TargetDir(const std::wstring& gameDir, const std::string& projectType,
                        const std::string& targetVersionId, bool* isolatedOut) {
     const std::string folder = DirNameFor(projectType);
@@ -208,6 +217,11 @@ nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameD
     if (versionId.empty() && projectId.empty()) {
         throw std::runtime_error("缺少要安装的项目或版本");
     }
+    // versionId 会拼进 /version/<id>：只允许 Modrinth ID 的字符集，
+    // 别让 "../"、"?query" 之类把请求引到同主机的其他接口上
+    if (!versionId.empty() && !SafeVersionId(versionId)) {
+        throw std::runtime_error("版本 ID 非法");
+    }
 
     // 拿到具体版本：给了 versionId 就直接用，否则取该项目最新的一个版本
     std::string downloadUrl;
@@ -247,6 +261,14 @@ nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameD
     }
 
     if (downloadUrl.empty()) throw std::runtime_error("无法解析下载地址");
+    // 下载地址来自远端响应：限定 https + Modrinth CDN，避免这个命令被当成任意 URL 下载器
+    {
+        const std::string host = HostOf(downloadUrl);
+        if (downloadUrl.rfind("https://", 0) != 0 ||
+            (host != "cdn.modrinth.com" && host != "cdn-raw.modrinth.com")) {
+            throw std::runtime_error("下载地址不在允许的域名内：" + host);
+        }
+    }
     if (fileName.empty()) fileName = "download.bin";
     // 文件名来自远端，做一次清洗，避免 ../../ 之类写穿目录
     for (char& ch : fileName) {
