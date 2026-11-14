@@ -1,8 +1,0 @@
-[package]
-name = "voxel-runtime"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[dependencies]
-voxel-core = { path = "../voxel-core" }

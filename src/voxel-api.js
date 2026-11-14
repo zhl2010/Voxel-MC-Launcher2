@@ -30,6 +30,55 @@
   var core = tauri && tauri.core ? tauri.core : null
   var eventApi = tauri && tauri.event ? tauri.event : null
 
+  /*
+   * 两套传输层：
+   *   - C++ 宿主：WebView2 的 postMessage，协议是 { id, cmd, args } → { id, ok, data }；
+   *   - Tauri 宿主：invoke。
+   * 上面的信封保持一致，所以 app.js 一行都不用改。
+   */
+  var webview = window.chrome && window.chrome.webview ? window.chrome.webview : null
+  var sequence = 0
+  var pending = Object.create(null)
+  var localHandlers = Object.create(null)
+
+  function webviewInvoke(command, args) {
+    return new Promise(function (resolve, reject) {
+      var id = ++sequence
+      pending[id] = { resolve: resolve, reject: reject }
+      webview.postMessage({ id: id, cmd: command, args: args })
+    })
+  }
+
+  function emitLocal(name, payload) {
+    var list = localHandlers[name]
+    if (!list) return
+    for (var i = 0; i < list.length; i++) {
+      try {
+        list[i](payload)
+      } catch (error) {
+        console.error('[voxel] 事件处理异常：', name, error)
+      }
+    }
+  }
+
+  if (webview) {
+    webview.addEventListener('message', function (event) {
+      var message = event.data
+      if (!message || typeof message !== 'object') return
+
+      if (message.type === 'event') {
+        emitLocal(message.event, message.payload)
+        return
+      }
+
+      var waiter = pending[message.id]
+      if (!waiter) return
+      delete pending[message.id]
+      if (message.ok) waiter.resolve(message.data)
+      else waiter.reject(new Error(message.error || '操作失败。'))
+    })
+  }
+
   /* 与 config-store.js 的 DEFAULT_SETTINGS 保持逐字段一致，保证首次渲染不崩。 */
   var DEFAULT_SETTINGS = {
     username: '',
@@ -109,13 +158,19 @@
    * 没有兜底值就返回 `{ ok: false }`，让前端弹出明确提示而不是静默失效。
    */
   function call(command, args) {
-    if (!core || typeof core.invoke !== 'function') {
-      console.warn('[voxel] Tauri 未注入（window.__TAURI__ 缺失）')
-      return Promise.resolve({ ok: true, data: fallbackFor(command) })
-    }
     var payload = args === undefined ? {} : args
-    return core
-      .invoke(command, payload)
+    var transport
+
+    if (webview) {
+      transport = webviewInvoke(command, payload)
+    } else if (core && typeof core.invoke === 'function') {
+      transport = core.invoke(command, payload)
+    } else {
+      console.warn('[voxel] 宿主传输层缺失（既没有 chrome.webview，也没有 __TAURI__）')
+      transport = Promise.reject(new Error('宿主传输层缺失'))
+    }
+
+    return transport
       .then(function (value) {
         return { ok: true, data: value }
       })
@@ -124,13 +179,23 @@
         if (Object.prototype.hasOwnProperty.call(FALLBACKS, command)) {
           return { ok: true, data: FALLBACKS[command], fallback: true }
         }
-        return { ok: false, error: '该功能尚未接入 Rust 后端（' + command + '）' }
+        return { ok: false, error: (error && error.message) || '该功能尚未接入原生后端（' + command + '）' }
       })
   }
 
   /* ---------------------------- 事件订阅 ---------------------------- */
 
   function listen(name, handler) {
+    if (webview) {
+      if (!localHandlers[name]) localHandlers[name] = []
+      var bucket = localHandlers[name]
+      bucket.push(handler)
+      return function () {
+        var index = bucket.indexOf(handler)
+        if (index >= 0) bucket.splice(index, 1)
+      }
+    }
+
     if (!eventApi || typeof eventApi.listen !== 'function') return function () {}
     var stop = null
     eventApi

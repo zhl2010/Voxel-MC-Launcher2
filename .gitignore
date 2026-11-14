@@ -1,15 +1,16 @@
-# Rust
-/target
-**/*.rs.bk
+# 构建产物（build.cmd 输出到 build/）
+/build
 
-# Tauri
-/src-tauri/target
-/src-tauri/gen
+# 编译中间件
+*.obj
+*.pdb
+*.ilk
+*.exe
 
-# 前端构建（本期不走 vite，保留以防接入）
-/node_modules
-/dist
-/package-lock.json
+# 构建/自检日志（每次跑都会变，不进版本库）
+build-log.txt
+selftest-build-log.txt
+selftest-run.txt
 
 # 编辑器 / OS
 /.vscode
