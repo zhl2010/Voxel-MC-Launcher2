@@ -571,8 +571,12 @@ void Launcher::RunImpl(nlohmann::json settings, Account account, std::wstring ga
     VersionPlan plan;
     const bool installed =
         EnsureVersion(version, settings, gameDir, &cancel_,
-                      [&](const nlohmann::json& data) { EmitGame(emit, "progress", data); }, &error,
-                      &plan);
+                      [&](const nlohmann::json& data) {
+                          nlohmann::json tagged = data;
+                          tagged["taskId"] = "launch";
+                          EmitGame(emit, "progress", tagged);
+                      },
+                      &error, &plan);
     for (const auto& note : plan.notes) {
         EmitGame(emit, "log", nlohmann::json{{"level", "WARN"},
                                              {"message", WideToUtf8(note)},

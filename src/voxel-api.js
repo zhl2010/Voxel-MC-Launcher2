@@ -326,6 +326,9 @@
     cancelLaunch: function () {
       return call('game_cancel')
     },
+    cancelDownload: function (taskId) {
+      return call('download_cancel', { taskId: taskId })
+    },
     getGameState: function () {
       return call('game_state')
     },

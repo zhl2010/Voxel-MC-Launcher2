@@ -12,8 +12,13 @@
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <functional>
 #include <string>
+
+namespace voxel {
+using InstallProgressFn = std::function<void(const nlohmann::json&)>;
+}
 
 namespace voxel::mods {
 
@@ -33,7 +38,8 @@ nlohmann::json Versions(const nlohmann::json& settings, const nlohmann::json& pa
 // targetVersionId 为空时用启动器当前选择的版本；给出则装进那个实例。
 // 返回 { ok, path, fileName, id, projectType, targetVersionId }
 nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameDir,
-                       const nlohmann::json& payload);
+                       const nlohmann::json& payload, std::atomic<bool>* cancel = nullptr,
+                       const InstallProgressFn& progress = {});
 
 // 列出某个目标目录下已安装的内容文件名。
 nlohmann::json Installed(const std::wstring& gameDir, const std::string& targetVersionId,

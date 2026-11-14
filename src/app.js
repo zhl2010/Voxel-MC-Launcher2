@@ -247,6 +247,10 @@ const state = {
   },
   logs: [],
   hudTimer: null,
+  // 下载任务清单：key = taskId（verify:<版本> / mod:<项目> / launch）
+  // 每个任务 { id, kind, name, detail, percent, speed, status }
+  // status: downloading | extracting | done | cancelled | error
+  downloads: new Map(),
   loginBusy: false,
   authTab: 'offline',
   mods: {
@@ -355,6 +359,7 @@ function cacheDom() {
     'pageTitle', 'tbStatusDot', 'tbStatusText',
     'windowMinimize', 'windowMaximize', 'maximizeIcon', 'windowFullScreen', 'windowClose',
     'sideStatusLabel', 'sideStatusText', 'sideProgress', 'sideAccount', 'sideAvatar',
+    'downloadsList',
     'sideAccountName', 'sideAccountType', 'sideEmelVersion',
     'syncChip', 'syncText', 'homeRefresh',
     'heroInstanceChip', 'heroVersion', 'heroLoader', 'changeVersion', 'launchStateLabel',
@@ -692,6 +697,15 @@ async function handleDownloadVersion() {
   }
 
   state.verifyingVersionId = id
+  // 在左侧多任务列表登记：taskId 与后端 progress 事件里的 taskId 一致
+  const verifyTaskId = `verify:${id}`
+  setDownloadTask(verifyTaskId, {
+    kind: 'version',
+    name: id,
+    detail: '准备下载…',
+    percent: 0,
+    status: 'downloading'
+  })
   if (button) {
     button.disabled = true
     button.textContent = '正在下载…'
@@ -758,11 +772,15 @@ async function handleDownloadVersion() {
   } catch (error) {
     appendLog('ERROR', `下载失败：${error.message}`)
     toast(error.message, 'error')
+    finishDownloadTask(verifyTaskId, error.message === '下载已取消' ? 'cancelled' : 'error')
   } finally {
     stopProgress()
     state.verifyingVersionId = ''
     if (dom.downloadProgress) dom.downloadProgress.hidden = true
     if (button) button.disabled = false
+    if (state.downloads.has(verifyTaskId) && state.downloads.get(verifyTaskId).status !== 'cancelled' && state.downloads.get(verifyTaskId).status !== 'error') {
+      finishDownloadTask(verifyTaskId, 'done')
+    }
     updateVersionDetail()
   }
 }
@@ -1156,14 +1174,18 @@ function subscribeGameEvents() {
       handleGamePhase(data)
     } else if (type === 'progress') {
       handleGameProgress(data)
+      // 带 taskId 的进度（版本下载 / 模组下载 / 启动下载）同步到左侧多任务列表
+      if (data && data.taskId) applyProgressToTask(data.taskId, data)
     } else if (type === 'log') {
       appendLog(data.level || 'INFO', data.message || '', data.time)
     } else if (type === 'error') {
       handleGameError(data)
+      if (state.downloads.has('launch')) finishDownloadTask('launch', 'error')
     } else if (type === 'crash') {
       handleGameCrash(data)
     } else if (type === 'cancelled') {
       handleGameCancelled(data)
+      finishDownloadTask('launch', 'cancelled')
     } else if (type === 'closed') {
       handleGameClosed(data)
     }
@@ -2740,11 +2762,19 @@ function setModIcon(mark, dataUrl) {
 async function installMod(mod, button, target, chosenVersionId = '') {
   if (state.mods.installing.has(mod.projectId)) return
 
+  const modTaskId = `mod:${mod.projectId}`
   // 以前每次都会弹目录选择框；现在目标实例由下拉框决定，
   // 只有用户显式点过"自定义目录"（state.modSaveDir 非空）时才沿用那个目录。
   state.mods.installing.add(mod.projectId)
   button.disabled = true
   button.textContent = '下载中…'
+  setDownloadTask(modTaskId, {
+    kind: 'mod',
+    name: mod.title || mod.projectId,
+    detail: '准备下载…',
+    percent: 0,
+    status: 'downloading'
+  })
 
   try {
     const result = await invoke(
@@ -2770,10 +2800,12 @@ async function installMod(mod, button, target, chosenVersionId = '') {
     await loadInstalledMods(true)
     button.textContent = '已安装'
     button.disabled = true
+    finishDownloadTask(modTaskId, 'done')
   } catch (error) {
     button.disabled = false
     button.textContent = '重试'
     toast(`模组安装失败：${error.message}`, 'error')
+    finishDownloadTask(modTaskId, error.message === '下载已取消' ? 'cancelled' : 'error')
   } finally {
     state.mods.installing.delete(mod.projectId)
   }
@@ -3911,6 +3943,7 @@ function handleGameState(data) {
     state.launch.step = 4
     setSideState('success', '游戏运行中', state.settings.version, 100)
     markHudRunning()
+    finishDownloadTask('launch', 'done')
   } else if (state.launch.status === 'launching') {
     setSideState('busy', '正在启动', state.settings.version, 5)
   } else if (state.launch.status === 'cancelling') {
@@ -3927,6 +3960,16 @@ function handleGamePhase(data) {
   setHudPhase(data.step, data.label || '正在处理', data.detail || '', indeterminate)
   const progress = data.done ? 100 : Math.min(96, 8 + state.launch.step * 20)
   setSideState('busy', data.label || '正在启动', data.detail || state.settings.version, progress)
+  // 进入下载阶段时在左侧列表登记一个"启动下载"任务
+  if (data.key === 'download' && !data.done) {
+    setDownloadTask('launch', {
+      kind: 'launch',
+      name: `启动 ${data.detail || state.settings.version}`,
+      detail: '检查游戏文件…',
+      percent: 0,
+      status: 'downloading'
+    })
+  }
 }
 
 function handleGameProgress(data) {
@@ -3999,6 +4042,7 @@ function handleGameClosed(data) {
   updateLaunchAvailability()
   updateTitlebarStatus()
   setSideState('idle', '准备就绪', '等待开始新的冒险', 0)
+  finishDownloadTask('launch', 'done')
 
   if (!wasCrashed) {
     if (code === 0 || code === null) {
@@ -4167,6 +4211,151 @@ function collapseHud() {
     dom.hudPillPercent.textContent = ''
   }
   dom.hudPill.hidden = false
+}
+
+/* -------------------------------------------------------------------------- */
+/* 下载任务（左侧多任务列表 + 终止）                                            */
+/* -------------------------------------------------------------------------- */
+
+// 注册/更新一个下载任务。patch 可覆盖 name / detail / percent / speed / status 等。
+function setDownloadTask(id, patch = {}) {
+  const existing = state.downloads.get(id)
+  const task = existing ? { ...existing, ...patch, id } : {
+    id,
+    kind: 'version',
+    name: id,
+    detail: '',
+    percent: 0,
+    speed: 0,
+    status: 'downloading',
+    ...patch
+  }
+  state.downloads.set(id, task)
+  renderDownloads()
+}
+
+// 结束一个任务：标记状态，几秒后从列表移除。
+function finishDownloadTask(id, status = 'done') {
+  const task = state.downloads.get(id)
+  if (task) {
+    task.status = status
+    if (status === 'cancelled') task.detail = '已取消'
+    if (status === 'done' && task.percent < 100) task.percent = 100
+    renderDownloads()
+    setTimeout(() => {
+      state.downloads.delete(id)
+      renderDownloads()
+    }, 2500)
+  }
+}
+
+function cancelDownload(id) {
+  const task = state.downloads.get(id)
+  if (!task) return
+  if (task.status === 'cancelled' || task.status === 'done' || task.status === 'error') return
+  task.status = 'cancelling'
+  task.detail = '正在终止…'
+  renderDownloads()
+  api.cancelDownload(id).catch(() => {})
+}
+
+function formatSpeed(bps) {
+  const n = Number(bps) || 0
+  return n > 0 ? formatBytes(n) : '0 B'
+}
+
+function renderDownloads() {
+  const list = dom.downloadsList
+  if (!list) return
+  const tasks = Array.from(state.downloads.values()).filter(
+    (t) => t.status !== 'done' || state.downloads.get(t.id)
+  )
+  // 只显示仍在进行 / 刚结束待移除的
+  const active = Array.from(state.downloads.values())
+  if (active.length === 0) {
+    list.hidden = true
+    dom.sideStatusText.hidden = false
+    return
+  }
+  list.hidden = false
+  dom.sideStatusText.hidden = true
+  list.replaceChildren()
+  for (const task of active) {
+    const row = document.createElement('div')
+    row.className = 'download-row'
+
+    const head = document.createElement('div')
+    head.className = 'download-row-head'
+
+    const title = document.createElement('span')
+    title.className = 'download-row-title'
+    title.textContent = task.name
+    head.append(title)
+
+    if (task.status === 'downloading' || task.status === 'extracting' || task.status === 'cancelling') {
+      const cancelBtn = document.createElement('button')
+      cancelBtn.className = 'download-cancel'
+      cancelBtn.type = 'button'
+      cancelBtn.setAttribute('aria-label', '终止下载')
+      cancelBtn.textContent = '✕'
+      cancelBtn.onclick = () => cancelDownload(task.id)
+      head.append(cancelBtn)
+    }
+
+    const detail = document.createElement('div')
+    detail.className = 'download-row-detail'
+    let detailText = task.detail || ''
+    if (task.status === 'downloading' && task.percent != null) {
+      const parts = []
+      if (task.detail) parts.push(task.detail)
+      parts.push(`${Math.round(task.percent)}%`)
+      if (task.speed) parts.push(`${formatSpeed(task.speed)}/s`)
+      detailText = parts.join(' · ')
+    }
+    detail.textContent = detailText
+    if (task.status === 'cancelled') detail.classList.add('muted')
+    if (task.status === 'error') detail.classList.add('error')
+
+    const bar = document.createElement('div')
+    bar.className = 'download-row-bar'
+    const fill = document.createElement('i')
+    const pct = task.status === 'cancelled' ? 0 : Math.max(0, Math.min(100, task.percent || 0))
+    fill.style.width = `${pct}%`
+    if (task.status === 'error') fill.style.background = 'linear-gradient(90deg,#b94d4d,#ff8585)'
+    bar.append(fill)
+
+    row.append(head, detail, bar)
+    list.append(row)
+  }
+}
+
+// 把后端 progress 事件里的字段换算成下载任务的展示字段。
+function applyProgressToTask(taskId, data) {
+  const task = state.downloads.get(taskId)
+  if (!task) return
+  if (data.stage === 'extract') {
+    task.status = 'extracting'
+    task.detail = `解压中… ${data.detail || ''}`
+    task.percent = Number(data.percent) || task.percent
+  } else {
+    const percent = Math.max(0, Math.min(100, Number(data.percent) || 0))
+    task.percent = percent
+    task.speed = data.speed || 0
+    if (data.finished) {
+      task.status = 'extracting'
+      task.detail = '下载完成，正在安装…'
+    } else {
+      task.status = 'downloading'
+      const total = data.overallTotalBytes ?? data.totalBytes
+      const done = data.overallDownloadedBytes ?? data.downloadedBytes
+      const files = data.overallTotalFiles
+        ? `${data.overallDownloadedFiles || 0}/${data.overallTotalFiles} 个文件`
+        : total ? `${formatBytes(done)} / ${formatBytes(total)}` : ''
+      const label = data.typeLabel || data.fileName || '下载中'
+      task.detail = files ? `${label} · ${files}` : label
+    }
+  }
+  renderDownloads()
 }
 
 function setSideState(kind, label, detail, progress) {

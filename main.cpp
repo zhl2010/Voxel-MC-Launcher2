@@ -282,6 +282,20 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
         bridge->Emit(event, payload);
     };
 
+    // 下载任务取消标志：key = taskId（"verify:<版本>" / "mod:<项目>" / "launch"）
+    // 用 shared_ptr 让后台线程持有的引用在外层清理后依然有效。
+    std::mutex downloadCancelsMutex;
+    std::map<std::string, std::shared_ptr<std::atomic<bool>>> downloadCancels;
+    auto SetDownloadCancel = [&](const std::string& id,
+                                 std::shared_ptr<std::atomic<bool>> flag) {
+        std::lock_guard<std::mutex> lock(downloadCancelsMutex);
+        downloadCancels[id] = std::move(flag);
+    };
+    auto ClearDownloadCancel = [&](const std::string& id) {
+        std::lock_guard<std::mutex> lock(downloadCancelsMutex);
+        downloadCancels.erase(id);
+    };
+
     // ---- 引导与设置 ----
     bridge->Register("app_bootstrap", [&](const nlohmann::json&) {
         const nlohmann::json current = Snapshot();
@@ -385,12 +399,23 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     bridge->RegisterAsync("mods_install", [&](const nlohmann::json& args, Reply reply) {
         const nlohmann::json payload =
             args.contains("payload") ? args["payload"] : nlohmann::json::object();
+        const std::string projectId = payload.value("projectId", std::string());
+        const std::string taskId = "mod:" + (projectId.empty() ? payload.value("versionId", std::string()) : projectId);
+        auto cancel = std::make_shared<std::atomic<bool>>(false);
+        SetDownloadCancel(taskId, cancel);
         try {
             const nlohmann::json current = Snapshot();
-            reply.Ok(voxel::mods::Install(current, voxel::ResolveGameDir(current), payload));
+            const auto progress = [&](const nlohmann::json& data) {
+                nlohmann::json tagged = data;
+                tagged["taskId"] = taskId;
+                bridge->Emit("game:event", EmitEnvelope("progress", tagged));
+            };
+            reply.Ok(voxel::mods::Install(current, voxel::ResolveGameDir(current), payload,
+                                          cancel.get(), progress));
         } catch (const std::exception& error) {
             reply.Fail(error.what());
         }
+        ClearDownloadCancel(taskId);
     });
 
     bridge->RegisterAsync("mods_installed", [&](const nlohmann::json& args, Reply reply) {
@@ -805,20 +830,39 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
             reply.Fail("版本名非法");
             return;
         }
+        const std::string taskId = "verify:" + versionId;
+        auto cancel = std::make_shared<std::atomic<bool>>(false);
+        SetDownloadCancel(taskId, cancel);
         const nlohmann::json current = Snapshot();
         const std::wstring gameDir = voxel::ResolveGameDir(current);
-        std::atomic<bool> cancel{false};
         std::wstring error;
         auto progress = [&](const nlohmann::json& data) {
-            bridge->Emit("game:event", EmitEnvelope("progress", data));
+            nlohmann::json tagged = data;
+            tagged["taskId"] = taskId;
+            bridge->Emit("game:event", EmitEnvelope("progress", tagged));
         };
         const nlohmann::json result =
-            voxel::VerifyVersion(gameDir, current, versionId, &cancel, progress, &error);
+            voxel::VerifyVersion(gameDir, current, versionId, cancel.get(), progress, &error);
+        ClearDownloadCancel(taskId);
         if (result.is_null()) {
-            reply.Fail(error.empty() ? "校验失败" : voxel::WideToUtf8(error));
+            reply.Fail(cancel->load() ? "下载已取消"
+                                      : (error.empty() ? "校验失败" : voxel::WideToUtf8(error)));
             return;
         }
         reply.Ok(result);
+    });
+
+    // 终止某个下载任务。taskId 形如 "verify:<版本>" / "mod:<项目>" / "launch"。
+    bridge->Register("download_cancel", [&](const nlohmann::json& args) {
+        const std::string taskId = args.value("taskId", std::string());
+        if (taskId == "launch") {
+            voxel::Launcher::Instance().Cancel();
+        } else if (!taskId.empty()) {
+            std::lock_guard<std::mutex> lock(downloadCancelsMutex);
+            auto it = downloadCancels.find(taskId);
+            if (it != downloadCancels.end()) it->second->store(true);
+        }
+        return nlohmann::json{{"ok", true}};
     });
 
     // ---- 窗口控制 ----

@@ -208,7 +208,8 @@ nlohmann::json Versions(const nlohmann::json& settings, const nlohmann::json& pa
 }
 
 nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameDir,
-                       const nlohmann::json& payload) {
+                       const nlohmann::json& payload, std::atomic<bool>* cancel,
+                       const InstallProgressFn& progress) {
     const std::string projectType = payload.value("projectType", std::string("mod"));
     const std::string versionId = payload.value("versionId", std::string());
     const std::string projectId = payload.value("projectId", std::string());
@@ -284,7 +285,19 @@ nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameD
 
     const std::wstring dest = fs::Join(dir, Utf8ToWide(fileName));
     std::wstring error;
-    if (!net::GetFile(Utf8ToWide(downloadUrl), dest, settings, &error, [](uint64_t) {}, nullptr)) {
+    uint64_t downloaded = 0;
+    if (!net::GetFile(Utf8ToWide(downloadUrl), dest, settings, &error,
+                     [&](uint64_t delta) {
+                         downloaded += delta;
+                         if (progress) {
+                             progress(nlohmann::json{{"stage", "download"},
+                                                     {"fileName", fileName},
+                                                     {"downloadedBytes", downloaded}});
+                         }
+                         // 取消由外部设置 cancel 标志，GetFile 下一次循环会自行退出
+                     },
+                     cancel)) {
+        if (cancel && cancel->load()) throw std::runtime_error("下载已取消");
         throw std::runtime_error("下载失败" + (error.empty() ? "" : "：" + WideToUtf8(error)));
     }
 

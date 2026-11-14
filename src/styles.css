@@ -470,6 +470,89 @@ svg {
   transition: width 0.25s ease;
 }
 
+/* 下载任务列表：版本 / 模组 / 启动下载一起显示在左侧 */
+.downloads-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0 10px;
+}
+
+.download-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.download-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.download-row-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-cancel {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  font-size: 0.625rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.download-cancel:hover {
+  background: rgba(185, 77, 77, 0.85);
+  color: #fff;
+}
+
+.download-row-detail {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.625rem;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-row-detail.muted {
+  color: var(--muted);
+}
+
+.download-row-detail.error {
+  color: #ff8585;
+}
+
+.download-row-bar {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.download-row-bar i {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-deep), var(--accent));
+  transition: width 0.25s ease;
+}
+
 .side-account {
   display: flex;
   align-items: center;
@@ -7183,6 +7266,27 @@ html[data-theme="light"] .side-status-track {
 }
 
 html[data-theme="light"] .side-status-track i {
+  background: var(--accent);
+}
+
+html[data-theme="light"] .download-row-title {
+  color: var(--text);
+}
+
+html[data-theme="light"] .download-cancel {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+html[data-theme="light"] .download-cancel:hover {
+  background: rgba(185, 77, 77, 0.85);
+  color: #fff;
+}
+
+html[data-theme="light"] .download-row-bar {
+  background: #c5c9c1;
+}
+
+html[data-theme="light"] .download-row-bar i {
   background: var(--accent);
 }
 
