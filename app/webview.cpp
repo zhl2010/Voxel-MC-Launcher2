@@ -215,13 +215,49 @@ bool WebViewHost::CreateInternal(HWND parent,
     }
 
     // ---- 4. 打开非客户区支持，让 CSS 的 -webkit-app-region 生效 ----
+    // 顺带关掉 devtools：前端没有调试需求，留着它等于给注入者一个免费调试器。
     Microsoft::WRL::ComPtr<ICoreWebView2Settings> settings;
     if (SUCCEEDED(web_->get_Settings(&settings)) && settings) {
+        settings->put_AreDevToolsEnabled(FALSE);
         Microsoft::WRL::ComPtr<ICoreWebView2Settings9> s9;
         if (SUCCEEDED(settings.As(&s9)) && s9) {
             s9->put_IsNonClientRegionSupportEnabled(TRUE);
         }
     }
+
+    // ---- 4b. 导航与弹窗全部收紧：虚拟主机内的跳转放行，外部链接交给系统浏览器 ----
+    // 没有这道闸，页面里一个 <a href> 或 window.open 就能在 WebView2 内加载任意网站，
+    // 那个页面随后发不出 IPC（TrustedSource 拦住了），但渲染进程、Cookie、缓存都暴露了。
+    const std::wstring trustedPrefix = L"https://" + virtualHost + L"/";
+    navHandler_ = Microsoft::WRL::Callback<ICoreWebView2NavigationStartingEventHandler>(
+        [trustedPrefix](ICoreWebView2* /*sender*/,
+                        ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+            LPWSTR uri = nullptr;
+            std::wstring url;
+            if (SUCCEEDED(args->get_Uri(&uri)) && uri) {
+                url = uri;
+                CoTaskMemFree(uri);
+            }
+            if (url.rfind(trustedPrefix, 0) == 0) return S_OK;
+            if (url.rfind(L"https://", 0) == 0 || url.rfind(L"http://", 0) == 0) {
+                ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            }
+            args->put_Handled(TRUE);
+            return S_OK;
+        });
+    if (navHandler_) web_->add_NavigationStarting(navHandler_.Get(), &navToken_);
+
+    newWindowHandler_ = Microsoft::WRL::Callback<ICoreWebView2NewWindowRequestedEventHandler>(
+        [](ICoreWebView2* /*sender*/, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT {
+            LPWSTR uri = nullptr;
+            if (SUCCEEDED(args->get_Uri(&uri)) && uri) {
+                ShellExecuteW(nullptr, L"open", uri, nullptr, nullptr, SW_SHOWNORMAL);
+                CoTaskMemFree(uri);
+            }
+            args->put_Handled(TRUE);
+            return S_OK;
+        });
+    if (newWindowHandler_) web_->add_NewWindowRequested(newWindowHandler_.Get(), &newWindowToken_);
 
     // ---- 5. 加载页面 ----
     web_->Navigate(navigateTo.c_str());

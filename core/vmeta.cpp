@@ -6,20 +6,18 @@
 #include "installer.h"
 #include "util.h"
 
-#include <atomic>
 #include <map>
 
 namespace voxel::vmeta {
 namespace {
 
 std::wstring MetaDir() {
-    static std::wstring dir;
-    static std::atomic<bool> ready{false};
-    if (!ready.load()) {
-        dir = fs::Join(UserDataDir(), L"version-meta");
-        fs::EnsureDir(dir);
-        ready = true;
-    }
+    // C++11 魔法静态：初始化线程安全，替代手写的 check-then-set（有竞争窗口）
+    static const std::wstring dir = []() {
+        const std::wstring d = fs::Join(UserDataDir(), L"version-meta");
+        fs::EnsureDir(d);
+        return d;
+    }();
     return dir;
 }
 

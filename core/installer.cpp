@@ -531,6 +531,18 @@ VersionPlan BuildPlan(const ResolvedVersion& version, const nlohmann::json& sett
                     const nlohmann::json& object = it.value();
                     const std::string hash = object.value("hash", std::string());
                     if (hash.size() < 4) continue;
+                    // hash 直接拼进本地路径和下载 URL：只认 hex 字符，
+                    // 别让索引里的 "../"、盘符之类内容写穿目录
+                    bool hexOk = true;
+                    for (char ch : hash) {
+                        const bool digit = ch >= '0' && ch <= '9';
+                        const bool alpha = (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
+                        if (!digit && !alpha) {
+                            hexOk = false;
+                            break;
+                        }
+                    }
+                    if (!hexOk) continue;
                     const std::string prefix = hash.substr(0, 2);
                     const std::wstring dest = fs::Join(fs::Join(objectsRoot, Utf8ToWide(prefix)),
                                                        Utf8ToWide(hash));

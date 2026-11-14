@@ -63,6 +63,10 @@ private:
     HWND parent_ = nullptr;
     HWND host_ = nullptr;
     EventRegistrationToken resourceToken_{};
+    EventRegistrationToken navToken_{};
+    EventRegistrationToken newWindowToken_{};
+    Microsoft::WRL::ComPtr<ICoreWebView2NavigationStartingEventHandler> navHandler_;
+    Microsoft::WRL::ComPtr<ICoreWebView2NewWindowRequestedEventHandler> newWindowHandler_;
     Microsoft::WRL::ComPtr<ICoreWebView2Environment> env_;
     Microsoft::WRL::ComPtr<ICoreWebView2Controller> controller_;
     Microsoft::WRL::ComPtr<ICoreWebView2> web_;
