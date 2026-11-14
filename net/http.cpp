@@ -120,9 +120,17 @@ bool RequestOnce(const std::wstring& url, const std::string& proxy, std::string*
         return false;
     }
 
-    // 跟随重定向（BMCLAPI 的下载节点会 302 到签名地址）
-    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
-    WinHttpSetOption(request, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
+    // 跟随重定向（BMCLAPI 的下载节点会 302 到签名地址），但禁止 https → http 降级。
+    // 原来用 ALWAYS，等于允许镜像把我们 302 到明文地址；没有 sha1 的条目就没兜底。
+    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
+    if (!WinHttpSetOption(request, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy,
+                          sizeof(redirectPolicy))) {
+        if (error) *error = L"无法设置重定向策略";
+        WinHttpCloseHandle(request);
+        WinHttpCloseHandle(connect);
+        WinHttpCloseHandle(session);
+        return false;
+    }
 
     // 允许 gzip/deflate，省带宽也避免个别镜像只给压缩体
     DWORD decompress = WINHTTP_DECOMPRESSION_FLAG_ALL;

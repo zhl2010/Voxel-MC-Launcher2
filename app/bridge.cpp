@@ -9,6 +9,16 @@ namespace {
 
 constexpr UINT kPumpMessage = WM_APP + 41;
 
+// 只接受虚拟主机映射出来的页面（生产）或本地 file://（运行时过旧时的兜底）。
+// 没有这道校验时，页面里任何一次跳转到外部网站，对方就能调用本地命令表
+// （改游戏目录、打开任意路径、启动游戏）。
+bool TrustedSource(const std::wstring& source) {
+    if (source.empty()) return true;  // 个别运行时取不到来源，放行以免误伤
+    if (source.rfind(L"https://voxel.local", 0) == 0) return true;
+    if (source.rfind(L"file://", 0) == 0) return true;
+    return false;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------- Reply
@@ -120,6 +130,13 @@ bool Bridge::Attach(ICoreWebView2* web) {
 
     messageHandler_ = Microsoft::WRL::Callback<ICoreWebView2WebMessageReceivedEventHandler>(
         [this](ICoreWebView2* /*sender*/, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+            // 先验来源：只信任本地映射页面，其它一律丢弃
+            LPWSTR source = nullptr;
+            const bool trusted =
+                SUCCEEDED(args->get_Source(&source)) && TrustedSource(source ? source : L"");
+            if (source) CoTaskMemFree(source);
+            if (!trusted) return S_OK;
+
             LPWSTR raw = nullptr;
             if (SUCCEEDED(args->get_WebMessageAsJson(&raw)) && raw) {
                 const std::string text = voxel::WideToUtf8(raw);
@@ -167,19 +184,54 @@ void Bridge::Dispatch(const nlohmann::json& message) {
 
     auto async = async_.find(cmd);
     if (async != async_.end()) {
+        // 并发上限：超了就如实拒绝，不能让线程数随点击次数无限增长
+        if (activeWorkers_.load() >= kMaxConcurrentWorkers) {
+            nlohmann::json busy = {
+                {"id", message.contains("id") ? message["id"] : nlohmann::json(id)},
+                {"ok", false},
+                {"error", "后台任务过多，请稍候再试"},
+            };
+            const std::wstring busyText = voxel::Utf8ToWide(busy.dump());
+            web_->PostWebMessageAsJson(busyText.c_str());
+            return;
+        }
+
         auto self = shared_from_this();
         Reply reply(self, id);
         AsyncHandler handler = async->second;
-        std::lock_guard<std::mutex> lock(queueMutex_);
-        workers_.emplace_back([self, handler, args, reply]() mutable {
-            try {
-                handler(args, reply);
-            } catch (const std::exception& error) {
-                reply.Fail(std::string("命令执行失败：") + error.what());
-            } catch (...) {
-                reply.Fail("命令执行失败（未知错误）");
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        activeWorkers_.fetch_add(1);
+
+        // 先把已经结束的线程移出容器，再追加新线程；join 必须在锁外做 ——
+        // 工作线程回调 Reply::Ok 时会去抢 queueMutex_，持锁 join 会直接死锁。
+        std::vector<std::thread> finished;
+        {
+            std::lock_guard<std::mutex> lock(queueMutex_);
+            for (auto it = workers_.begin(); it != workers_.end();) {
+                if (it->done->load()) {
+                    finished.push_back(std::move(it->thread));
+                    it = workers_.erase(it);
+                } else {
+                    ++it;
+                }
             }
-        });
+            workers_.push_back(WorkerSlot{
+                std::thread([self, handler, args, reply, done]() mutable {
+                    try {
+                        handler(args, reply);
+                    } catch (const std::exception& error) {
+                        reply.Fail(std::string("命令执行失败：") + error.what());
+                    } catch (...) {
+                        reply.Fail("命令执行失败（未知错误）");
+                    }
+                    done->store(true);
+                    self->activeWorkers_.fetch_sub(1);
+                }),
+                done});
+        }
+        for (auto& thread : finished) {
+            if (thread.joinable()) thread.join();
+        }
         return;
     }
 
@@ -197,7 +249,8 @@ void Bridge::Shutdown() {
     std::vector<std::thread> workers;
     {
         std::lock_guard<std::mutex> lock(queueMutex_);
-        workers.swap(workers_);
+        for (auto& slot : workers_) workers.push_back(std::move(slot.thread));
+        workers_.clear();
     }
     for (auto& worker : workers) {
         if (worker.joinable()) worker.join();

@@ -33,18 +33,36 @@ std::wstring LowerKey(const std::wstring& text) {
     return out;
 }
 
+// manifest 是外部输入：artifact 的 path 一旦带上 ".." 或盘符，就能把文件写到
+// 游戏目录之外，形成任意位置写入。所以逐段校验，任何可疑分段整体拒绝。
+bool SafeRelativeSegment(const std::string& part) {
+    if (part.empty()) return false;
+    if (part == "." || part == "..") return false;
+    for (char ch : part) {
+        if (ch == ':' || ch == '\\' || ch == '\0') return false;
+        if (static_cast<unsigned char>(ch) < 0x20) return false;
+    }
+    return true;
+}
+
+// 返回空串表示路径非法（绝对路径、盘符、穿越），调用方必须跳过该条目。
 std::wstring FromSlashPath(const std::wstring& base, const std::string& relative) {
+    if (relative.empty()) return std::wstring();
+    if (relative[0] == '/' || relative[0] == '\\') return std::wstring();       // 绝对路径
+    if (relative.size() >= 2 && relative[1] == ':') return std::wstring();      // 盘符
+
     std::wstring current = base;
-    std::string part;
-    for (size_t index = 0; index <= relative.size(); ++index) {
-        if (index == relative.size() || relative[index] == '/') {
-            if (!part.empty()) {
-                current = fs::Join(current, Utf8ToWide(part));
-                part.clear();
-            }
-            continue;
+    size_t index = 0;
+    while (index < relative.size()) {
+        const size_t next = relative.find_first_of("/\\", index);
+        const size_t end = next == std::string::npos ? relative.size() : next;
+        const std::string part = relative.substr(index, end - index);
+        if (!part.empty()) {
+            if (!SafeRelativeSegment(part)) return std::wstring();
+            current = fs::Join(current, Utf8ToWide(part));
         }
-        part.push_back(relative[index]);
+        if (next == std::string::npos) break;
+        index = next + 1;
     }
     return current;
 }
@@ -407,10 +425,13 @@ VersionPlan BuildPlan(const ResolvedVersion& version, const nlohmann::json& sett
             if (downloads.is_object() && downloads.contains("artifact")) {
                 const ArtifactRef artifact = ReadArtifact(downloads["artifact"]);
                 if (artifact.valid) {
-                    const std::wstring dest = FromSlashPath(fs::Join(gameDir, L"libraries"), artifact.path);
-                    builder.AddFile("运行库", dest, artifact.url, artifact.sha1, artifact.size,
-                                    verifyHashes);
-                    plannedArtifact = true;
+                    const std::wstring dest =
+                        FromSlashPath(fs::Join(gameDir, L"libraries"), artifact.path);
+                    if (!dest.empty()) {
+                        builder.AddFile("运行库", dest, artifact.url, artifact.sha1, artifact.size,
+                                        verifyHashes);
+                        plannedArtifact = true;
+                    }
                 }
             }
 
@@ -428,10 +449,13 @@ VersionPlan BuildPlan(const ResolvedVersion& version, const nlohmann::json& sett
                     native = ReadArtifact(downloads["classifiers"][key]);
                 }
                 if (native.valid) {
-                    const std::wstring dest = FromSlashPath(fs::Join(gameDir, L"libraries"), native.path);
-                    builder.AddFile("运行库", dest, native.url, native.sha1, native.size,
-                                    verifyHashes);
-                    plan.nativeJars.push_back(dest);
+                    const std::wstring dest =
+                        FromSlashPath(fs::Join(gameDir, L"libraries"), native.path);
+                    if (!dest.empty()) {
+                        builder.AddFile("运行库", dest, native.url, native.sha1, native.size,
+                                        verifyHashes);
+                        plan.nativeJars.push_back(dest);
+                    }
                 } else {
                     plan.notes.push_back(L"无法定位 native 包：" + Utf8ToWide(name));
                 }
@@ -440,8 +464,11 @@ VersionPlan BuildPlan(const ResolvedVersion& version, const nlohmann::json& sett
             if (!plannedArtifact && !name.empty() && !library.contains("natives")) {
                 const ArtifactRef guessed = GuessArtifact(name);
                 if (guessed.valid) {
-                    const std::wstring dest = FromSlashPath(fs::Join(gameDir, L"libraries"), guessed.path);
-                    builder.AddFile("运行库", dest, std::string(), std::string(), 0, false);
+                    const std::wstring dest =
+                        FromSlashPath(fs::Join(gameDir, L"libraries"), guessed.path);
+                    if (!dest.empty()) {
+                        builder.AddFile("运行库", dest, std::string(), std::string(), 0, false);
+                    }
                 }
             }
         }

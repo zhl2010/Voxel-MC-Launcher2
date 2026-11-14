@@ -41,6 +41,15 @@ bool BoolOf(const nlohmann::json& object, const std::string& key) {
     return object[key].is_boolean() ? object[key].get<bool>() : false;
 }
 
+// 安全取子对象：result["summary"] 在 result 为 null 时会触发 nlohmann 的
+// 断言（const operator[] 对 null 未定义），自检在"校验失败"路径上本来就会
+// 拿到 null，必须走 contains 判断而不是直接下标。
+const nlohmann::json& ChildOf(const nlohmann::json& object, const std::string& key) {
+    static const nlohmann::json kEmpty = nlohmann::json::object();
+    if (!object.is_object() || !object.contains(key)) return kEmpty;
+    return object[key];
+}
+
 void TestManifest(const nlohmann::json& settings) {
     Line("[manifest] ListVersions(force=true) ...");
     const nlohmann::json result = voxel::ListVersions(settings, true);
@@ -103,14 +112,14 @@ void TestJava(const nlohmann::json& settings, const std::wstring& gameDir) {
     Line("[java] SelectJava(major>=21) => " + voxel::WideToUtf8(selected.path));
 }
 
-void TestPlan(const nlohmann::json& settings, const std::wstring& gameDir,
+bool TestPlan(const nlohmann::json& settings, const std::wstring& gameDir,
               const std::string& versionId) {
     Line("[plan] " + versionId + " ...");
     std::wstring error;
     const voxel::ResolvedVersion version = voxel::ResolveVersion(gameDir, settings, versionId, &error);
     if (version.id.empty()) {
         Line("[plan] FAIL " + voxel::WideToUtf8(error));
-        return;
+        return false;
     }
     Line("[plan] id=" + version.id + " jarId=" + version.jarId +
          " javaMajor=" + std::to_string(version.javaMajor) +
@@ -127,6 +136,7 @@ void TestPlan(const nlohmann::json& settings, const std::wstring& gameDir,
         Line("[plan]   " + item.type + " size=" + std::to_string(item.size) + " " +
              voxel::WideToUtf8(item.dest));
     }
+    return true;
 }
 
 void TestVerify(const nlohmann::json& settings, const std::wstring& gameDir,
@@ -152,8 +162,8 @@ void TestVerify(const nlohmann::json& settings, const std::wstring& gameDir,
         return;
     }
     Line("[verify] ok=" + std::string(BoolOf(result, "ok") ? "true" : "false") +
-         " missing=" + std::to_string(IntOf(result["summary"], "missing")) +
-         " corrupt=" + std::to_string(IntOf(result["summary"], "corrupt")) +
+         " missing=" + std::to_string(IntOf(ChildOf(result, "summary"), "missing")) +
+         " corrupt=" + std::to_string(IntOf(ChildOf(result, "summary"), "corrupt")) +
          " repaired=" + std::to_string(IntOf(result, "repaired")) +
          " remaining=" + std::to_string(IntOf(result, "remaining")) + " in " +
          std::to_string(static_cast<int>(seconds)) + "s");
@@ -250,9 +260,17 @@ int wmain(int argc, wchar_t** argv) {
     stage("manifest", [&]() { TestManifest(settings); });
     stage("auth", []() { TestAuth(); });
     stage("java", [&]() { TestJava(settings, gameDir); });
-    stage("plan", [&]() { TestPlan(settings, gameDir, versionId); });
-    stage("verify", [&]() { TestVerify(settings, gameDir, versionId); });
-    stage("launch", [&]() { TestLaunch(settings, gameDir, versionId, seconds); });
+    // 版本解析失败时后面的校验/启动都没有意义，直接跳过并说明原因，
+    // 否则只会在下游拿空结果继续跑，把失败原因冲淡。
+    bool planOk = false;
+    stage("plan", [&]() { planOk = TestPlan(settings, gameDir, versionId); });
+    if (planOk) {
+        stage("verify", [&]() { TestVerify(settings, gameDir, versionId); });
+        stage("launch", [&]() { TestLaunch(settings, gameDir, versionId, seconds); });
+    } else {
+        Line("[verify] skipped：版本无法解析");
+        Line("[launch] skipped：版本无法解析");
+    }
     Line("[done]");
     return 0;
 }

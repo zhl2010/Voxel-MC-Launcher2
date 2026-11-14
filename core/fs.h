@@ -17,9 +17,17 @@ namespace voxel::fs {
 
 namespace stdfs = std::filesystem;
 
+inline bool IsAbsolutePath(const std::wstring& path) {
+    if (path.size() >= 2 && path[1] == L':') return true;   // C:\...
+    if (path.rfind(L"\\\\", 0) == 0) return true;            // UNC \\server\share
+    return false;
+}
+
 inline std::wstring Join(const std::wstring& a, const std::wstring& b) {
     if (a.empty()) return b;
     if (b.empty()) return a;
+    // b 是绝对路径时不能再拼，否则会得到 a\C:\... 这种无法打开的怪路径
+    if (IsAbsolutePath(b)) return b;
     const wchar_t last = a.back();
     if (last == L'\\' || last == L'/') return a + b;
     return a + L"\\" + b;
@@ -64,10 +72,16 @@ inline bool WriteText(const std::wstring& path, const std::string& text) {
 
 // 原子替换写：先写 .tmp 再 MoveFileEx，避免半个文件把配置/清单弄坏。
 inline bool WriteTextAtomic(const std::wstring& path, const std::string& text) {
-    const std::wstring temp = path + L".tmp";
+    // 临时名带 pid + 时钟：并发写同一目标时不会互相覆盖对方的 .tmp
+    const std::wstring temp = path + L".tmp-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+                              std::to_wstring(GetTickCount());
     if (!WriteText(temp, text)) return false;
-    return MoveFileExW(temp.c_str(), path.c_str(),
-                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    if (MoveFileExW(temp.c_str(), path.c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
+        return true;
+    }
+    DeleteFileW(temp.c_str());  // 替换失败别留下垃圾
+    return false;
 }
 
 inline std::uint64_t FileSize(const std::wstring& path) {

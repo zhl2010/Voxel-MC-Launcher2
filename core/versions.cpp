@@ -115,7 +115,19 @@ nlohmann::json ScanLocalVersions(const std::wstring& gameDir) {
 
 std::wstring ResolveGameDir(const nlohmann::json& settings) {
     const std::string custom = settings.value("gameDir", std::string());
-    if (!custom.empty()) return Utf8ToWide(custom);
+    if (!custom.empty()) {
+        // 相对路径的效果取决于当前工作目录（双击启动与命令行启动会落在不同位置），
+        // 统一转成绝对路径，行为才可预期。
+        const std::wstring raw = Utf8ToWide(custom);
+        std::wstring buffer(MAX_PATH * 2, L'\0');
+        const DWORD length =
+            GetFullPathNameW(raw.c_str(), static_cast<DWORD>(buffer.size()), buffer.data(), nullptr);
+        if (length > 0 && length < buffer.size()) {
+            buffer.resize(length);
+            return buffer;
+        }
+        return raw;
+    }
     const std::wstring roaming = KnownFolder(FOLDERID_RoamingAppData);
     if (roaming.empty()) return L".minecraft";
     return fs::Join(roaming, L".minecraft");

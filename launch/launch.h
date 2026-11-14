@@ -45,6 +45,9 @@ class Launcher {
     void EmitState(const EmitFn& emit);
 
     std::mutex mutex_;
+    // 串行化 Start：检查"是否已在跑"与 join 上一次 worker_ 必须原子地完成，
+    // 否则两次并发 game_launch 可能都通过检查，起两个 JVM。
+    std::mutex startMutex_;
     std::atomic<bool> cancel_{false};
     std::string status_ = "idle";
     nlohmann::json current_ = nullptr;

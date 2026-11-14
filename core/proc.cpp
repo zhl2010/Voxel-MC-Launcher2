@@ -66,17 +66,42 @@ bool RunCapture(const std::wstring& exe, const std::vector<std::wstring>& args,
         return false;
     }
 
-    // 输出只用于诊断，读干净避免子进程因管道写满而卡死
+    // 输出只用于诊断。这里不能直接 ReadFile 读到 EOF：子进程如果派生出孙进程
+    // （bInheritHandles=TRUE，孙进程也握着写端），ReadFile 会永久阻塞，
+    // timeoutMs 就形同虚设。改成"有数据就读、没数据看进程还在不在"的轮询。
+    const DWORD deadline = GetTickCount() + timeoutMs;
     std::string output;
     char buffer[4096];
-    DWORD read = 0;
-    while (ReadFile(readPipe, buffer, sizeof(buffer), &read, nullptr) && read > 0) {
+    bool timedOut = false;
+
+    auto drainOnce = [&]() -> bool {
+        DWORD available = 0;
+        if (!PeekNamedPipe(readPipe, nullptr, 0, nullptr, &available, nullptr)) return false;
+        if (available == 0) return false;
+        DWORD read = 0;
+        const DWORD want = available < sizeof(buffer) ? available : sizeof(buffer);
+        if (!ReadFile(readPipe, buffer, want, &read, nullptr) || read == 0) return false;
         if (output.size() < 64 * 1024) output.append(buffer, read);
+        return true;
+    };
+
+    for (;;) {
+        if (drainOnce()) continue;
+        if (WaitForSingleObject(info.hProcess, 0) == WAIT_OBJECT_0) break;
+        if (GetTickCount() > deadline) {
+            timedOut = true;
+            break;
+        }
+        Sleep(10);
+    }
+    // 进程已退出，把管道里剩下的读干净（防止子进程写满管道后卡在退出路径上）
+    if (!timedOut) {
+        while (drainOnce()) {
+        }
     }
     CloseHandle(readPipe);
 
-    const DWORD wait = WaitForSingleObject(info.hProcess, timeoutMs);
-    if (wait == WAIT_TIMEOUT) {
+    if (timedOut) {
         TerminateProcess(info.hProcess, 1);
         CloseHandle(info.hThread);
         CloseHandle(info.hProcess);

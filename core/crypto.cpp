@@ -38,7 +38,20 @@ bool Digest(const wchar_t* algo, const unsigned char* data, size_t size,
         ok = BCryptCreateHash(provider, &hash, nullptr, 0, nullptr, 0, 0) == 0;
     }
     if (ok) {
-        ok = BCryptHashData(hash, const_cast<PUCHAR>(data), static_cast<ULONG>(size), 0) == 0;
+        // BCryptHashData 的长度参数是 ULONG：一次传 size 会在超大输入上截断，
+        // 这里按 1MB 分块喂，语义与一次性喂完全相同。
+        constexpr size_t kChunk = 1u << 20;
+        const unsigned char* cursor = data;
+        size_t remaining = size;
+        do {
+            const size_t step = remaining < kChunk ? remaining : kChunk;
+            if (BCryptHashData(hash, const_cast<PUCHAR>(cursor), static_cast<ULONG>(step), 0) != 0) {
+                ok = false;
+                break;
+            }
+            cursor += step;
+            remaining -= step;
+        } while (remaining > 0);
     }
     if (ok) {
         out.resize(hashSize);

@@ -407,7 +407,8 @@ std::wstring MaskedCommand(const std::wstring& javaPath, const std::vector<std::
             continue;
         }
         text += L" " + proc::Quote(arg);
-        if (arg == L"--accessToken") maskNext = true;
+        // 令牌类参数一律遮蔽，避免正版登录接入后 clientToken 泄进日志
+        if (arg == L"--accessToken" || arg == L"--clientToken") maskNext = true;
     }
     return text;
 }
@@ -452,20 +453,29 @@ nlohmann::json Launcher::State() {
 
 nlohmann::json Launcher::Start(const nlohmann::json& settings, const Account& account,
                                const std::wstring& gameDir, EmitFn emit) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (status_ != "idle") throw std::runtime_error("游戏已在启动或运行中");
-    }
     if (account.name.empty()) throw std::runtime_error("请先登录账户");
     const std::string versionId = settings.value("version", std::string());
     if (versionId.empty()) throw std::runtime_error("请先选择一个 Minecraft 版本");
 
+    // 整个 Start 串行化：检查状态、回收上一次线程、置位 launching 三者必须原子完成，
+    // 否则两个并发调用都能看到 idle 而各自拉起一个 JVM。
+    std::lock_guard<std::mutex> startLock(startMutex_);
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (status_ != "idle") throw std::runtime_error("游戏已在启动或运行中");
+    }
+
     if (worker_.joinable()) worker_.join();  // 上一次已经结束，回收线程
 
     cancel_ = false;
-    SetStatus("launching", nlohmann::json{{"id", versionId},
-                                          {"loader", settings.value("loader", std::string("vanilla"))}});
-    accountJson_ = account.ToJson();
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        status_ = "launching";
+        current_ = nlohmann::json{{"id", versionId},
+                                  {"loader", settings.value("loader", std::string("vanilla"))}};
+        accountJson_ = account.ToJson();
+    }
     worker_ = std::thread(&Launcher::Run, this, settings, account, gameDir, emit);
     return State();
 }

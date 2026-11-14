@@ -70,10 +70,22 @@ class Bridge : public std::enable_shared_from_this<Bridge> {
     Microsoft::WRL::ComPtr<ICoreWebView2WebMessageReceivedEventHandler> messageHandler_;
     EventRegistrationToken token_{};
 
+    // 工作线程槽位：done 让 UI 线程能把已经跑完的线程 join 掉再回收。
+    // 原来每个异步命令都 emplace_back 一个 std::thread 且永不清理，
+    // 反复触发"刷新版本/校验/启动"会把线程数顶到耗尽。
+    struct WorkerSlot {
+        std::thread thread;
+        std::shared_ptr<std::atomic<bool>> done;
+    };
+
+    // 同时在跑的异步命令上限：超过就直接拒绝，而不是无限起线程。
+    static constexpr int kMaxConcurrentWorkers = 8;
+
     HWND pump_ = nullptr;
     WNDPROC originalProc_ = nullptr;
     std::mutex queueMutex_;
     std::vector<std::function<void()>> queue_;
-    std::vector<std::thread> workers_;
+    std::vector<WorkerSlot> workers_;
+    std::atomic<int> activeWorkers_{0};
     std::atomic<bool> alive_{true};
 };
