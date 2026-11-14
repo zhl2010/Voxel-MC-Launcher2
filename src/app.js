@@ -725,6 +725,13 @@ function bindVersions() {
   dom.versionList.addEventListener('click', (event) => {
     const item = event.target instanceof Element ? event.target.closest('[data-version]') : null
     if (!item) return
+    // 只有已安装的版本才能被选中；未安装的条目点击无效，
+    // 需要先点「下载此版本」把它装到本机。
+    const version = state.versions.find((v) => v.id === item.dataset.version)
+    if (!version || (!version.installed && !version.local)) {
+      toast('该版本尚未安装，请先点击右侧「下载此版本」', 'info')
+      return
+    }
     selectVersion(item.dataset.version, { scroll: false })
   })
 
@@ -1351,8 +1358,17 @@ function navigate(page) {
   if (!PAGE_TITLES[page]) return
   state.page = page
   if (page === 'versions' && !state.pendingVersion) {
-    state.pendingVersion = getActiveVersion() || state.versions[0]?.id || ''
+    // 只从"已安装"的版本里挑默认选中项。
+    // 原来会退回到 state.versions[0]（官方清单第一条，比如 26.3），
+    // 结果本机什么都没装却显示成选中了 26.3。
+    const installed = state.versions.filter((item) => item.installed || item.local)
+    const activeId = getActiveVersion()
+    const preferred = installed.some((item) => item.id === activeId)
+      ? activeId
+      : installed[0]?.id || ''
+    state.pendingVersion = preferred
     if (state.pendingVersion) selectVersion(state.pendingVersion, { scroll: false })
+    else updateVersionDetail()
   }
 
   dom.pages.forEach((panel) => panel.classList.toggle('active', panel.dataset.pagePanel === page))
@@ -1416,18 +1432,19 @@ async function loadVersions(force = false) {
 
     if (!state.versions.length) throw new Error('版本清单为空')
 
-    if (!state.settings.version || !state.versions.some((version) => version.id === state.settings.version)) {
-      const fallback = state.latest.release || state.versions[0]?.id
-      if (fallback) {
-        await saveImmediate({ version: fallback, loader: 'vanilla' }).catch(() => {})
-      }
-    }
+    // 注意：这里原来会在 settings.version 缺失时自动写入 latest.release，
+    // 结果一台什么都没装的机器还没选版本就被"自动选中"了官方最新版（26.3），
+    // 界面上显示成"当前版本 26.3"。版本必须由用户自己选，所以不做任何自动回填。
 
     if (!state.pendingVersion || !state.versions.some((version) => version.id === state.pendingVersion)) {
-      state.pendingVersion = getActiveVersion()
+      // 只认已安装的版本；一个都没装就保持"未选中"状态，
+      // 不再退回到官方清单第一条（那会让人以为已经选好了 26.3）。
+      const installed = state.versions.filter((v) => v.installed || v.local)
+      const activeId = getActiveVersion()
+      state.pendingVersion = installed.some((v) => v.id === activeId)
+        ? activeId
+        : installed[0]?.id || ''
     }
-
-    if (!state.pendingVersion) state.pendingVersion = state.versions[0]?.id || ''
     state.pendingLoader =
       state.pendingVersion === state.settings.version ? state.settings.loader : 'vanilla'
 
@@ -1529,6 +1546,11 @@ function renderVersionList() {
     button.setAttribute('aria-selected', version.id === state.pendingVersion ? 'true' : 'false')
     if (version.id === state.pendingVersion) button.classList.add('selected')
     if (version.id === state.settings.version) button.classList.add('current')
+    // 未安装的版本不可选中，视觉上也要弱化，避免以为点了就能用
+    if (!version.installed && !version.local) {
+      button.classList.add('not-installed')
+      button.title = '该版本尚未安装，请先下载'
+    }
 
     // 已安装的版本在列表里显示图标（自选方块 / 自定义上传）；未安装的保留小圆点
     let indicator
@@ -2663,11 +2685,18 @@ function formatCompactNumber(value) {
 /* Home                                                                        */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * 当前"使用中"的版本 id。
+ *
+ * 只认用户真正设置过的 settings.version，并且该版本必须在本机清单里。
+ * 原来会在没有设置时退回到 state.latest.release（官方最新正式版），
+ * 导致一台什么都没装的机器上也显示"当前版本 26.3"——那是官方清单的第一条，
+ * 不是用户选中的东西。
+ */
 function getActiveVersion() {
-  if (state.settings?.version && state.versions.some((item) => item.id === state.settings.version)) {
-    return state.settings.version
-  }
-  return state.latest.release || state.versions[0]?.id || ''
+  const id = state.settings?.version
+  if (!id) return ''
+  return state.versions.some((item) => item.id === id) ? id : ''
 }
 
 function loaderDisplay(type) {
