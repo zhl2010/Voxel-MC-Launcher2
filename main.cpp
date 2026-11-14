@@ -620,11 +620,25 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     bridge->Register("app_open_path", [&](const nlohmann::json& args) {
         std::string target = args.value("target", std::string());
         if (target.empty()) throw std::runtime_error("缺少目标路径");
-        const std::wstring path = voxel::Utf8ToWide(target);
+        // 前端传的是命名目标，在这里解析成真实路径，避免落到进程 CWD 下
+        const std::wstring gameDir = voxel::ResolveGameDir(Snapshot());
+        std::wstring path;
+        if (target == "game") {
+            path = gameDir;
+        } else if (target == "versions") {
+            path = voxel::fs::Join(gameDir, L"versions");
+        } else if (target == "latest-log") {
+            path = voxel::fs::Join(gameDir, L"logs");  // 只开目录，日志文件用户自己点
+        } else {
+            path = voxel::Utf8ToWide(target);
+        }
         if (!voxel::fs::Exists(path)) {
             if (!voxel::fs::EnsureDir(path)) throw std::runtime_error("目录不存在且无法创建");
         }
-        ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        // 只允许打开目录：ShellExecuteW "open" 碰到 exe/脚本会直接拉起进程，
+        // 前端一旦被注入，这里就成任意代码执行入口，所以文件一律拒绝。
+        if (!voxel::fs::IsDirectory(path)) throw std::runtime_error("只支持打开文件夹");
+        ShellExecuteW(nullptr, L"explore", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         return nlohmann::json::object();
     });
 
