@@ -364,7 +364,7 @@ function cacheDom() {
     'runtimeMemoryValue', 'runtimeMemoryText', 'runtimeJava', 'runtimeInstalled',
     'quickVersions', 'versionsRefresh', 'versionSearch', 'versionCount', 'versionList',
     'loadMoreVersions', 'detailType', 'detailVersion', 'detailInstalled', 'detailDate',
-    'loaderOptions', 'loaderHint', 'applyVersion', 'openVersionFolder',
+    'loaderOptions', 'loaderHint', 'openVersionFolder',
     'deleteVersion', 'openVersionsFolder',
     'modsRefresh', 'modSearchInput', 'modSearchBtn', 'modsTarget', 'modsTargetLabel',
     'modsCompat', 'modsCompatTitle', 'modsCompatText', 'modsResultMeta', 'modResults', 'modPagination',
@@ -396,7 +396,6 @@ function cacheDom() {
     'hudPill', 'hudPillText', 'hudPillPercent', 'toastStack',
     'installedList', 'installedSummary', 'installedRefresh',
     'contentGameVersion', 'contentLoader', 'contentInstallTarget',
-    'downloadVersion', 'downloadProgress', 'downloadProgressText', 'downloadBarFill',
     'detailIcon', 'detailDisplayName', 'detailIconPicker', 'detailUploadIcon'
   ]
 
@@ -476,8 +475,7 @@ function bindHome() {
   })
   if (dom.installedRefresh) dom.installedRefresh.addEventListener('click', () => renderInstalledVersions())
 
-  // 下载 / 校验共用一个按钮，统一走 handleVerifyVersion（它带日志与状态管理）
-  dom.downloadVersion.addEventListener('click', handleVerifyVersion)
+  // 版本下载页只保留"使用"语义；文件补齐由启动流程负责，这里不再挂下载/校验按钮
   // 自定义版本名与图标
   if (dom.detailDisplayName) {
     dom.detailDisplayName.addEventListener('blur', () => commitDisplayName())
@@ -626,28 +624,8 @@ async function handleVerifyVersion() {
  * button must look normal (and explain why it is unavailable) instead of showing a stale spinner.
  */
 function renderVerifyButton() {
-  const selected = state.pendingVersion || state.settings.version
-  const verifying = state.verifyingVersionId
-  // 下载与校验共用一个按钮（dom.downloadVersion）
-  const button = dom.downloadVersion
-  if (!button) return
-
-  if (verifying && verifying === selected) {
-    button.disabled = true
-    button.textContent = '正在下载 / 校验…'
-    button.dataset.state = 'verifying'
-    return
-  }
-
-  button.disabled = false
-  button.dataset.state = 'idle'
-  button.title = verifying ? `正在校验 ${verifying}，请等待其完成` : ''
-
-  // 文案按"当前选中版本装没装"决定，由 updateVersionDetail 负责设置默认值；
-  // 这里仅在存在别的版本正在校验时提示等待，不覆盖正常文案。
-  if (verifying) {
-    button.textContent = `校验中（${verifying}）`
-  }
+  // 版本下载页已不再提供下载/校验按钮（文件由启动流程自动补齐），
+  // 这里保留空实现，避免其它调用点报错。
 }
 
 function bindVersions() {
@@ -677,7 +655,7 @@ function bindVersions() {
     renderVersionList()
   })
 
-  dom.applyVersion.addEventListener('click', applySelectedVersion)
+  // 版本下载页不再有「使用此版本」按钮：切换使用版本走游戏大厅的「切换版本」
 }
 
 function bindMods() {
@@ -1651,10 +1629,6 @@ function updateVersionDetail() {
     dom.detailVersion.textContent = '选择一个版本'
     dom.detailDate.textContent = '从左侧列表中选择版本，查看安装信息。'
     dom.detailInstalled.hidden = true
-    dom.applyVersion.disabled = true
-    dom.applyVersion.hidden = false
-    dom.applyVersion.textContent = '选择一个版本'
-    if (dom.downloadVersion) dom.downloadVersion.hidden = true
     renderDetailIcon(null)
     if (dom.detailDisplayName) dom.detailDisplayName.value = ''
     return
@@ -1676,31 +1650,6 @@ function updateVersionDetail() {
   dom.detailInstalled.hidden = !version.installed
   // 标题下方永远显示"真身"：自定义名遮不住它实际是什么版本 + 什么加载器
   dom.detailDate.textContent = versionIdentity(version)
-
-  const isApplied =
-    state.pendingVersion === state.settings.version && state.pendingLoader === state.settings.loader
-
-  // 只有"已安装"的版本才能被选中使用；未安装的只能先下载。
-  // 本地实例恒为已安装（installed=true），官方版本要看本机 versions/ 里有没有。
-  // 版面按安装状态二选一，绝不并列两个下载类按钮：
-  //   已安装 → 「使用此版本」（主按钮）+「重新下载 / 校验文件」
-  //   未安装 → 「下载此版本」（唯一动作）+ 文件夹/删除
-  const installed = Boolean(version.installed || version.local)
-  if (installed) {
-    dom.applyVersion.hidden = false
-    dom.applyVersion.disabled = false
-    dom.applyVersion.textContent = isApplied ? '返回游戏大厅' : '使用此版本'
-  } else {
-    dom.applyVersion.hidden = true
-    dom.applyVersion.disabled = true
-  }
-
-  // 同一个按钮承担两种文案：未安装是"下载"，已安装是"重新下载/校验"
-  if (dom.downloadVersion) {
-    dom.downloadVersion.hidden = false
-    dom.downloadVersion.disabled = false
-    dom.downloadVersion.textContent = installed ? '重新下载 / 校验文件' : '下载此版本'
-  }
 }
 
 async function loadPendingLoaders() {
@@ -2004,63 +1953,6 @@ function renderLoaderOptions(options, errorMessage = '') {
   }
 
   dom.loaderOptions.replaceChildren(fragment)
-}
-
-async function applySelectedVersion() {
-  if (!state.pendingVersion) return
-
-  // 只有已安装的版本可以被应用为当前版本；未安装的必须先下载。
-  // 界面上按钮已经藏起来了，这里再兜一层，防止旧 DOM 状态或快捷键绕过去。
-  const targetVersion = state.versions.find((item) => item.id === state.pendingVersion)
-  if (!targetVersion || (!targetVersion.installed && !targetVersion.local)) {
-    toast('该版本尚未下载，请先点击「下载此版本」', 'warning')
-    return
-  }
-
-  const pendingLoaderVersion = state.pendingLoaderVersion[state.pendingLoader] || ''
-  const isApplied =
-    state.pendingVersion === state.settings.version &&
-    state.pendingLoader === state.settings.loader &&
-    pendingLoaderVersion === (state.settings.loaderVersion || '')
-
-  if (!isApplied) {
-    dom.applyVersion.disabled = true
-    const previousVersion = state.settings.version
-    const previousLoader = state.settings.loader
-    const previousLoaderVersion = state.settings.loaderVersion || ''
-    try {
-      const localVersion = state.versions.find(
-        (item) => item.id === state.pendingVersion && item.local
-      )
-      const loader = localVersion?.loader || state.pendingLoader
-      await saveImmediate({
-        version: state.pendingVersion,
-        loader,
-        loaderVersion: localVersion ? '' : pendingLoaderVersion
-      })
-      toast(
-        localVersion
-          ? `已选择本地版本 ${state.pendingVersion}`
-          : pendingLoaderVersion
-            ? `已选择 Minecraft ${state.pendingVersion} · ${loaderDisplay(loader)} ${pendingLoaderVersion}`
-            : `已选择 Minecraft ${state.pendingVersion} · ${loaderDisplay(loader)}`,
-        'success'
-      )
-      updateHomeVersion()
-      await refreshHomeLoader()
-    } catch (error) {
-      state.settings.version = previousVersion
-      state.settings.loader = previousLoader
-      state.settings.loaderVersion = previousLoaderVersion
-      state.pendingLoader = previousLoader
-      updateVersionDetail()
-      toast(error.message, 'error')
-      dom.applyVersion.disabled = false
-      return
-    }
-  }
-
-  navigate('home')
 }
 
 function formatDate(value) {
