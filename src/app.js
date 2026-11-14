@@ -2,7 +2,7 @@ const api = window.voxel
 
 const PAGE_TITLES = {
   home: '游戏大厅',
-  versions: '下载',
+  versions: '版本下载',
   mods: '内容下载',
   settings: '设置',
   logs: '运行日志'
@@ -40,6 +40,36 @@ const LOADER_LOGOS = {
   // NeoForge：铁砧 + 火焰
   neoforge: `<svg viewBox="0 0 24 24" fill="none"><path d="M12 3c2 3 1 4.5 1 6 0 1 .8 1.6 1.6 1.2.9-.4 1.2-1.4 1-2.3 2 2 3.4 4.2 3.4 6.6A6 6 0 0 1 6 14.5C6 11 8.6 7.4 12 3z" fill="currentColor" opacity=".9"/></svg>`,
 }
+/**
+ * 版本"真身"描述：无论实例被改成什么名字，都始终显示它实际是哪个游戏版本 + 哪个加载器。
+ *
+ * 形如 "1.21.1-fabric-0.20.1" 的实例 → "Minecraft 1.21.1 · Fabric 0.20.1"
+ * 纯原版实例                       → "Minecraft 1.21.1"
+ * 用户自定义名会遮掉这些信息，所以这个名字要一直挂在标题下面。
+ */
+function versionIdentity(version) {
+  if (!version) return ''
+  const id = version.id || ''
+
+  // 先按 id 解析加载器派生实例
+  const match = /^(.+?)-(fabric|forge|neoforge|quilt)-(.+)$/.exec(id)
+  if (match) {
+    return `Minecraft ${match[1]} · ${loaderDisplay(match[2])} ${match[3]}`
+  }
+
+  // 后端解析出的本地实例信息
+  if (version.local) {
+    const base = version.baseVersion || ''
+    const loader = version.loader && version.loader !== 'vanilla' ? version.loader : ''
+    if (base && loader) return `Minecraft ${base} · ${loaderDisplay(loader)}`
+    if (base) return `Minecraft ${base}`
+    return `本地实例 ${id}`
+  }
+
+  // 官方原版版本
+  return `Minecraft ${id}`
+}
+
 /**
  * 版本图标。
  * MC 里的"方块"图标用统一的等距立方体绘制，按方块名取不同配色，
@@ -1204,11 +1234,7 @@ function populateContentTargets() {
     const title = document.createElement('strong')
     title.textContent = item.id
     const meta = document.createElement('span')
-    // 形如 1.21.1-fabric-0.20.1 的是加载器派生实例
-    const match = /^(.+?)-(fabric|forge|neoforge)-(.+)$/.exec(item.id)
-    meta.textContent = match
-      ? `基于 ${match[1]} · ${match[2]} ${match[3]}`
-      : `原版${item.releaseTime ? ' · ' + item.releaseTime.slice(0, 10) : ''}`
+    meta.textContent = versionIdentity(item)
     main.append(title, meta)
 
     const actions = document.createElement('div')
@@ -1463,14 +1489,12 @@ function renderVersionList() {
     const title = document.createElement('strong')
     title.textContent = version.displayName || version.id
     const subtitle = document.createElement('span')
-    const bits = version.local
-      ? [
-          '本地自定义版本',
-          version.baseVersion ? `基于 ${version.baseVersion}` : '原版版本未解析',
-          version.loader && version.loader !== 'vanilla' ? loaderDisplay(version.loader) : ''
-        ]
+    // 真身永远显示；带自定义名的实例更要显示，否则看不出它是什么
+    const identity = versionIdentity(version)
+    const suffix = version.local
+      ? [version.installed ? '已安装' : '']
       : [formatDate(version.releaseTime), version.installed ? '已安装' : '']
-    subtitle.textContent = bits.filter(Boolean).join(' · ')
+    subtitle.textContent = [identity, ...suffix].filter(Boolean).join(' · ')
     main.append(title, subtitle)
 
     const badge = document.createElement('span')
@@ -1615,7 +1639,9 @@ async function downloadPendingVersion() {
   const id = state.pendingVersion
   if (!id) return
   const version = state.versions.find((item) => item.id === id)
-  if (!version || version.installed || version.local) return
+  if (!version) return
+  // 已安装的版本也允许再次下载：后端会走校验并只补缺失/损坏的文件，
+  // 对"重新点一次确认文件完整"或者"同一版本装第二个加载器"都适用。
 
   dom.downloadVersion.disabled = true
   dom.downloadVersion.textContent = '正在下载…'
@@ -1689,31 +1715,36 @@ function updateVersionDetail() {
   renderIconPicker(version.icon || 'blocks/stone')
   if (dom.detailDisplayName) dom.detailDisplayName.value = version.displayName || ''
   dom.detailInstalled.hidden = !version.installed
-  dom.detailDate.textContent = version.local
-    ? version.baseVersion
-      ? `本地自定义版本 · 基于 ${version.baseVersion}${version.loader && version.loader !== 'vanilla' ? ` · ${loaderDisplay(version.loader)}` : ''}`
-      : '本地自定义版本 · 无法解析本地实例的原版版本'
-    : `发布于 ${formatDate(version.releaseTime)} · ${version.installed ? '已安装，可直接启动' : '首次使用需要下载'}`
+  // 标题下方永远显示"真身"：自定义名遮不住它实际是什么版本 + 什么加载器
+  dom.detailDate.textContent = versionIdentity(version)
 
   const isApplied =
     state.pendingVersion === state.settings.version && state.pendingLoader === state.settings.loader
 
   // 只有"已安装"的版本才能被选中使用；未安装的只能先下载。
   // 本地实例恒为已安装（installed=true），官方版本要看本机 versions/ 里有没有。
+  // 下载按钮始终可用：无论这个版本装没装、是不是本地实例，都应该能再次下载/校验补齐。
+  //
+  // 这样做是为了支持"同一版本装多个加载器"——用户在版本下载页点一次原版、
+  // 再点一次 Fabric / Forge，会各自生成独立的实例目录，互不覆盖。
+  // 所以这里不表达"选择"语义，也不因为已安装就隐藏按钮。
+  if (dom.downloadVersion) {
+    dom.downloadVersion.hidden = false
+    dom.downloadVersion.disabled = false
+    dom.downloadVersion.textContent = version.local || version.installed
+      ? '重新下载 / 校验'
+      : '下载此版本'
+  }
+
+  // 「使用此版本」只对已安装的版本有意义；离线/未安装的版本不能拿来启动
   const installed = Boolean(version.installed || version.local)
   if (installed) {
     dom.applyVersion.hidden = false
     dom.applyVersion.disabled = false
     dom.applyVersion.textContent = isApplied ? '返回游戏大厅' : '使用此版本'
-    if (dom.downloadVersion) dom.downloadVersion.hidden = true
   } else {
     dom.applyVersion.hidden = true
     dom.applyVersion.disabled = true
-    if (dom.downloadVersion) {
-      dom.downloadVersion.hidden = false
-      dom.downloadVersion.disabled = false
-      dom.downloadVersion.textContent = '下载此版本'
-    }
   }
 }
 
@@ -1849,10 +1880,30 @@ function vanillaOption(mcVersion) {
  */
 async function installLoaderInstance(mc, loader, loaderVersion) {
   if (state.installingLoader) return
+
+  // 装之前先让用户给实例起个名字。
+  // 同一个游戏版本装两次同一加载器（比如两个 Fabric 版本做对照）时，
+  // 默认目录名会撞车，靠自定义名区分。留空就用默认名。
+  const defaultName = `${mc}-${loader}-${loaderVersion || ''}`.replace(/-+$/, '')
+  const customName = window.prompt(
+    `为这个实例起个名字（可直接用默认值）\n\n${mc} · ${loaderDisplay(loader)} ${loaderVersion || '最新'}`,
+    defaultName
+  )
+  if (customName === null) return // 用户取消
+
+  const trimmed = customName.trim()
+  // 名字与默认值相同时不传，交给后端生成标准实例名
+  const finalName = trimmed && trimmed !== defaultName ? trimmed : ''
+
   state.installingLoader = true
   try {
     const result = await invoke(
-      api.installLoader({ gameVersion: mc, loader, loaderVersion: loaderVersion || '' })
+      api.installLoader({
+        gameVersion: mc,
+        loader,
+        loaderVersion: loaderVersion || '',
+        customName: finalName
+      })
     )
     if (result.alreadyInstalled) {
       toast(`独立版本 ${result.id} 已安装`, 'info')

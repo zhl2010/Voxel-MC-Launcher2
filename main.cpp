@@ -349,10 +349,11 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
         const std::string mcVersion = payload.value("gameVersion", std::string());
         const std::string loader = payload.value("loader", std::string());
         const std::string loaderVersion = payload.value("loaderVersion", std::string());
+        const std::string customName = payload.value("customName", std::string());
         try {
             const nlohmann::json current = Snapshot();
             reply.Ok(voxel::loader::InstallLoader(current, voxel::ResolveGameDir(current),
-                                                  mcVersion, loader, loaderVersion));
+                                                  mcVersion, loader, loaderVersion, customName));
         } catch (const std::exception& error) {
             reply.Fail(error.what());
         }
@@ -547,7 +548,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
         try {
             const std::string data = voxel::skin::OnlineSkinDataUrl(Snapshot(), account);
             reply.Ok(data.empty() ? nlohmann::json(nullptr) : nlohmann::json(data));
-        } catch (const std::exception& error) {
+        } catch (const std::exception&) {
             // 取皮肤失败不该打断界面，返回 null 让前端回退到默认皮肤
             reply.Ok(nlohmann::json(nullptr));
         }

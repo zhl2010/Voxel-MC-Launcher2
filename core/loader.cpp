@@ -127,7 +127,8 @@ std::string WriteInstance(const std::wstring& gameDir, const std::string& id,
 
 // Fabric 安装：先查列表确认版本存在，再取 profile/json 落地
 nlohmann::json InstallFabric(const nlohmann::json& settings, const std::wstring& gameDir,
-                             const std::string& mc, std::string loaderVersion) {
+                             const std::string& mc, std::string loaderVersion,
+                             const std::string& customName) {
     std::wstring error;
     std::string body;
 
@@ -163,7 +164,9 @@ nlohmann::json InstallFabric(const nlohmann::json& settings, const std::wstring&
         throw std::runtime_error("Fabric 安装配置格式异常");
     }
 
-    const std::string id = InstanceIdFor(mc, "fabric", loaderVersion);
+    const std::string id = customName.empty()
+                                ? InstanceIdFor(mc, "fabric", loaderVersion)
+                                : customName;
     const int libraries = profile.contains("libraries") && profile["libraries"].is_array()
                               ? static_cast<int>(profile["libraries"].size())
                               : 0;
@@ -193,7 +196,7 @@ struct NeoLikeSource {
 
 nlohmann::json InstallNeoLike(const nlohmann::json& settings, const std::wstring& gameDir,
                               const std::string& mc, const NeoLikeSource& source,
-                              std::string loaderVersion) {
+                              std::string loaderVersion, const std::string& customName) {
     const bool isNeo = source.loader == "neoforge";
 
     // 1) 确定版本号：没指定就取该 Minecraft 版本对应的最新构建
@@ -261,7 +264,9 @@ nlohmann::json InstallNeoLike(const nlohmann::json& settings, const std::wstring
     }
 
     // 4) 落地成独立实例
-    const std::string id = InstanceIdFor(mc, source.loader, loaderVersion);
+    const std::string id = customName.empty()
+                                ? InstanceIdFor(mc, source.loader, loaderVersion)
+                                : customName;
     const int libraries = profile.contains("libraries") && profile["libraries"].is_array()
                               ? static_cast<int>(profile["libraries"].size())
                               : 0;
@@ -407,18 +412,33 @@ nlohmann::json ListLoaders(const nlohmann::json& settings, const std::string& mc
 
 nlohmann::json InstallLoader(const nlohmann::json& settings, const std::wstring& gameDir,
                              const std::string& mcVersion, const std::string& loader,
-                             const std::string& loaderVersion) {
+                             const std::string& loaderVersion, const std::string& customName) {
     if (mcVersion.empty()) throw std::runtime_error("请先选择一个 Minecraft 版本");
     if (!SafeVersionId(mcVersion)) throw std::runtime_error("Minecraft 版本名非法");
     if (loader.empty() || loader == "vanilla") {
         throw std::runtime_error("原版无需安装加载器");
     }
 
+    // 用户自定义的实例名：为空时用默认的 <mc>-<loader>-<ver>。
+    // 一旦给名字，就直接当目录名——同一个游戏版本 + 同一个加载器想装两份时，
+    // 靠它区分，否则两者会写进同一个目录互相覆盖。
+    if (!customName.empty()) {
+        if (!SafeVersionId(customName)) {
+            throw std::runtime_error("实例名不能包含 \\ / : * ? \" < > | 等字符");
+        }
+        const std::wstring dir = VersionDir(gameDir, customName);
+        if (fs::Exists(fs::Join(dir, Utf8ToWide(customName) + L".json"))) {
+            throw std::runtime_error("实例 " + customName + " 已存在，请换一个名字");
+        }
+    }
+
     if (loader == "fabric") {
         // 已经装过同一个组合时不重复下载：先看目标版本目录是否已存在。
         // 指定了版本就直接判；没指定则先把最新稳定版解析出来再判。
         if (!loaderVersion.empty()) {
-            const std::string id = InstanceIdFor(mcVersion, "fabric", loaderVersion);
+            const std::string id = customName.empty()
+                                        ? InstanceIdFor(mcVersion, "fabric", loaderVersion)
+                                        : customName;
             if (fs::Exists(fs::Join(VersionDir(gameDir, id), Utf8ToWide(id) + L".json"))) {
                 return nlohmann::json{{"id", id},
                                       {"loader", "fabric"},
@@ -429,7 +449,7 @@ nlohmann::json InstallLoader(const nlohmann::json& settings, const std::wstring&
         }
 
         const nlohmann::json installed =
-            InstallFabric(settings, gameDir, mcVersion, loaderVersion);
+            InstallFabric(settings, gameDir, mcVersion, loaderVersion, customName);
         return nlohmann::json{{"id", installed.value("id", std::string())},
                               {"loader", "fabric"},
                               {"loaderVersion", installed.value("loaderVersion", std::string())},
@@ -440,7 +460,9 @@ nlohmann::json InstallLoader(const nlohmann::json& settings, const std::wstring&
     if (loader == "forge" || loader == "neoforge") {
         const bool isNeo = loader == "neoforge";
         if (!loaderVersion.empty()) {
-            const std::string id = InstanceIdFor(mcVersion, loader, loaderVersion);
+            const std::string id = customName.empty()
+                                        ? InstanceIdFor(mcVersion, loader, loaderVersion)
+                                        : customName;
             if (fs::Exists(fs::Join(VersionDir(gameDir, id), Utf8ToWide(id) + L".json"))) {
                 return nlohmann::json{{"id", id},
                                       {"loader", loader},
@@ -460,7 +482,7 @@ nlohmann::json InstallLoader(const nlohmann::json& settings, const std::wstring&
         }
 
         const nlohmann::json installed =
-            InstallNeoLike(settings, gameDir, mcVersion, source, loaderVersion);
+            InstallNeoLike(settings, gameDir, mcVersion, source, loaderVersion, customName);
         return nlohmann::json{{"id", installed.value("id", std::string())},
                               {"loader", loader},
                               {"loaderVersion", installed.value("loaderVersion", std::string())},

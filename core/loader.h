@@ -40,8 +40,10 @@ struct LoaderOption {
 nlohmann::json ListLoaders(const nlohmann::json& settings, const std::string& mcVersion);
 
 // 安装加载器为独立版本。成功返回前端需要的字段，失败抛 std::runtime_error。
+// customName 非空时用作实例目录名——同一游戏版本 + 同一加载器要装多份时靠它区分；
+// 为空则用默认的 <mc>-<loader>-<版本>。
 nlohmann::json InstallLoader(const nlohmann::json& settings, const std::wstring& gameDir,
                              const std::string& mcVersion, const std::string& loader,
-                             const std::string& loaderVersion);
+                             const std::string& loaderVersion, const std::string& customName);
 
 }  // namespace voxel::loader
