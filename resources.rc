@@ -11,3 +11,8 @@
 102 RCDATA "src\\styles.css"
 103 RCDATA "src\\app.js"
 104 RCDATA "src\\voxel-api.js"
+
+// 应用图标：exe 图标用 ICO（Windows 按尺寸自动挑选），界面里用 PNG。
+// 编号 1 是 ICON 资源的最低 ID，任务栏/资源管理器都认这个。
+1 ICON "assets\\icon.ico"
+105 RCDATA "assets\\icon.png"

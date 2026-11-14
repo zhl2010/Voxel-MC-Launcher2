@@ -16,6 +16,8 @@ const AssetEntry kAssets[] = {
     {102, L"styles.css", L"text/css; charset=utf-8"},
     {103, L"app.js", L"application/javascript; charset=utf-8"},
     {104, L"voxel-api.js", L"application/javascript; charset=utf-8"},
+    // 应用图标：界面里当 logo 用，和 exe 图标是同一张图
+    {105, L"icon.png", L"image/png"},
 };
 
 bool LoadResourceBytes(int id, std::vector<unsigned char>& data) {

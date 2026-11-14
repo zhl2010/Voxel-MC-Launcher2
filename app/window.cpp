@@ -25,11 +25,26 @@ bool MainWindow::Create(HINSTANCE inst, const wchar_t* title, int width, int hei
     wc.hIconSm = wc.hIcon;
     if (!RegisterClassExW(&wc)) return false;
 
+    // 居中显示：原来用 CW_USEDEFAULT，窗口会落在系统随便挑的位置。
+    // 按主显示器的**工作区**（排除任务栏）居中，多屏时落在主屏上。
+    int posX = CW_USEDEFAULT;
+    int posY = CW_USEDEFAULT;
+    RECT work{};
+    if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) {
+        const int workW = work.right - work.left;
+        const int workH = work.bottom - work.top;
+        posX = work.left + (workW - width) / 2;
+        posY = work.top + (workH - height) / 2;
+        // 窗口比工作区还大时至少保证左上角可见
+        if (posX < work.left) posX = work.left;
+        if (posY < work.top) posY = work.top;
+    }
+
     // WS_EX_APPWINDOW：无边框窗口默认不进任务栏，显式要求有任务栏按钮
     hwnd_ = CreateWindowExW(WS_EX_APPWINDOW,
                             kClassName, title,
                             WS_POPUP | WS_CLIPCHILDREN | WS_VISIBLE,
-                            CW_USEDEFAULT, CW_USEDEFAULT, width, height,
+                            posX, posY, width, height,
                             nullptr, nullptr, inst, this);
     if (!hwnd_) return false;
 

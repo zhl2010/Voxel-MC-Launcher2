@@ -24,6 +24,147 @@ const LOADER_NAMES = {
   neoforge: 'NeoForge'
 }
 
+/**
+ * 各加载器的图形标识。
+ * 用内联 SVG 而不是外链图片：单 exe 分发、离线可用，也不需要给 WebView 放行外部资源。
+ */
+const LOADER_LOGOS = {
+  // 原版：草方块剖面（与启动器图标同源）
+  vanilla: `<svg viewBox="0 0 24 24" fill="none"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" fill="currentColor" opacity=".9"/><path d="M4 7.5L12 12l8-4.5M12 12v9" stroke="var(--panel, #0a0a0a)" stroke-width="1.2"/></svg>`,
+  // Fabric：梭形编织
+  fabric: `<svg viewBox="0 0 24 24" fill="none"><path d="M4 12c2.5-4.5 5.5-6.5 8-6.5S17.5 7.5 20 12c-2.5 4.5-5.5 6.5-8 6.5S6.5 16.5 4 12z" fill="currentColor" opacity=".85"/><path d="M8 12h8" stroke="var(--panel, #0a0a0a)" stroke-width="1.4"/></svg>`,
+  // Quilt：方格拼接
+  quilt: `<svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="7" height="7" fill="currentColor" opacity=".9"/><rect x="13" y="4" width="7" height="7" fill="currentColor" opacity=".55"/><rect x="4" y="13" width="7" height="7" fill="currentColor" opacity=".55"/><rect x="13" y="13" width="7" height="7" fill="currentColor" opacity=".9"/></svg>`,
+  // Forge：铁砧
+  forge: `<svg viewBox="0 0 24 24" fill="none"><path d="M5 6h11l3 3-2 1H9v2h7l-1 3H9v3H6v-3H4v-2h3V9H5V6z" fill="currentColor" opacity=".9"/></svg>`,
+  // NeoForge：铁砧 + 火焰
+  neoforge: `<svg viewBox="0 0 24 24" fill="none"><path d="M12 3c2 3 1 4.5 1 6 0 1 .8 1.6 1.6 1.2.9-.4 1.2-1.4 1-2.3 2 2 3.4 4.2 3.4 6.6A6 6 0 0 1 6 14.5C6 11 8.6 7.4 12 3z" fill="currentColor" opacity=".9"/></svg>`,
+}
+/**
+ * 版本图标。
+ * MC 里的"方块"图标用统一的等距立方体绘制，按方块名取不同配色，
+ * 省掉给每个方块存一张图片。custom 表示用户上传的 PNG。
+ */
+const BLOCK_ICONS = {
+  'blocks/grass':    { top: '#9ed36a', left: '#7a5a3a', right: '#5f4527' },
+  'blocks/stone':    { top: '#b8b8b8', left: '#8f8f8f', right: '#6e6e6e' },
+  'blocks/dirt':     { top: '#9e7b52', left: '#7a5c3a', right: '#5d452a' },
+  'blocks/oak':      { top: '#c8a06a', left: '#a37d4c', right: '#7d5f37' },
+  'blocks/diamond':  { top: '#8fe3d8', left: '#57bfb4', right: '#3a9a90' },
+  'blocks/gold':     { top: '#ffe27a', left: '#e0b83c', right: '#b8932a' },
+  'blocks/redstone': { top: '#f06868', left: '#c73c3c', right: '#9a2a2a' },
+  'blocks/emerald':  { top: '#8de08d', left: '#4fb94f', right: '#348a34' },
+  'blocks/lapis':    { top: '#6f94e8', left: '#3f63c4', right: '#2c4899' },
+  'blocks/obsidian': { top: '#3a2f52', left: '#2a2140', right: '#1b152c' },
+}
+
+const BLOCK_ICON_ORDER = Object.keys(BLOCK_ICONS)
+
+/** 生成一个等距方块 SVG 字符串。 */
+function blockIconSvg(key, size = 18) {
+  const c = BLOCK_ICONS[key] || BLOCK_ICONS['blocks/stone']
+  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" aria-hidden="true">
+    <path d="M12 2.5l9 5v9l-9 5-9-5v-9l9-5z" fill="${c.left}" opacity=".35"/>
+    <path d="M12 2.5l9 5-9 5-9-5 9-5z" fill="${c.top}"/>
+    <path d="M12 12.5l9-5v9l-9 5v-9z" fill="${c.right}"/>
+    <path d="M12 12.5l-9-5v9l9 5v-9z" fill="${c.left}"/>
+  </svg>`
+}
+
+/** 渲染详情面板里的图标选择器。 */
+function renderIconPicker(currentKey) {
+  const picker = dom.detailIconPicker
+  if (!picker) return
+  const fragment = document.createDocumentFragment()
+  for (const key of BLOCK_ICON_ORDER) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'icon-choice'
+    if (key === currentKey) button.classList.add('active')
+    button.title = key.replace('blocks/', '')
+    button.dataset.iconKey = key
+    button.innerHTML = blockIconSvg(key, 20)
+    button.addEventListener('click', () => setVersionIconKey(key))
+    fragment.append(button)
+  }
+  picker.replaceChildren(fragment)
+}
+
+/** 详情标题旁的大图标。 */
+function renderDetailIcon(version) {
+  const holder = dom.detailIcon
+  if (!holder) return
+  if (!version) {
+    holder.innerHTML = ''
+    return
+  }
+  if (version.icon === 'custom') {
+    holder.innerHTML = `<img alt="" src="" />`
+    applyCustomVersionIcon(holder.querySelector('img'), version.id)
+    return
+  }
+  holder.innerHTML = blockIconSvg(version.icon || 'blocks/stone', 24)
+}
+
+async function applyCustomVersionIcon(img, versionId) {
+  try {
+    const data = await invoke(api.getVersionIcon(versionId))
+    if (data && img.isConnected) img.src = data
+  } catch {
+    /* 取不到就留空，不阻塞界面 */
+  }
+}
+
+/** 选择内置方块图标。 */
+async function setVersionIconKey(key) {
+  const id = state.pendingVersion
+  if (!id) return
+  try {
+    await invoke(api.renameVersion(id, undefined, key))
+    const item = state.versions.find((v) => v.id === id)
+    if (item) item.icon = key
+    renderIconPicker(key)
+    renderDetailIcon(item)
+    renderVersionList()
+  } catch (error) {
+    toast(error.message, 'error')
+  }
+}
+
+/** 上传自定义 PNG 作为版本图标。 */
+async function uploadVersionIcon() {
+  const id = state.pendingVersion
+  if (!id) return
+  try {
+    const result = await invoke(api.setVersionIcon(id))
+    if (result?.cancelled) return
+    const item = state.versions.find((v) => v.id === id)
+    if (item) item.icon = 'custom'
+    renderDetailIcon(item)
+    renderVersionList()
+    toast('图标已更新', 'success')
+  } catch (error) {
+    toast(error.message, 'error')
+  }
+}
+
+/** 保存显示名称（失焦或回车时触发）。 */
+async function commitDisplayName() {
+  const id = state.pendingVersion
+  if (!id || !dom.detailDisplayName) return
+  const name = dom.detailDisplayName.value.trim()
+  try {
+    await invoke(api.renameVersion(id, name))
+    const item = state.versions.find((v) => v.id === id)
+    if (item) item.displayName = name
+    renderVersionList()
+    updateVersionDetail()
+  } catch (error) {
+    toast(error.message, 'error')
+  }
+}
+
+
 const state = {
   settings: null,
   account: null,
@@ -222,7 +363,8 @@ function cacheDom() {
     'hudPill', 'hudPillText', 'hudPillPercent', 'toastStack',
     'installedList', 'installedSummary', 'installedRefresh',
     'contentGameVersion', 'contentLoader', 'contentInstallTarget',
-    'downloadVersion', 'downloadProgress', 'downloadProgressText', 'downloadBarFill'
+    'downloadVersion', 'downloadProgress', 'downloadProgressText', 'downloadBarFill',
+    'detailIcon', 'detailDisplayName', 'detailIconPicker', 'detailUploadIcon'
   ]
 
   for (const id of ids) dom[id] = document.getElementById(id)
@@ -304,6 +446,20 @@ function bindHome() {
   // 下载选中版本：复用后端的校验/修补链路，它会把缺失文件补齐并生成版本 json
   if (dom.downloadVersion) {
     dom.downloadVersion.addEventListener('click', () => downloadPendingVersion())
+  }
+
+  // 自定义版本名与图标
+  if (dom.detailDisplayName) {
+    dom.detailDisplayName.addEventListener('blur', () => commitDisplayName())
+    dom.detailDisplayName.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        dom.detailDisplayName.blur()
+      }
+    })
+  }
+  if (dom.detailUploadIcon) {
+    dom.detailUploadIcon.addEventListener('click', () => uploadVersionIcon())
   }
 
   // 内容类型（模组 / 资源包 / 光影包）
@@ -1280,13 +1436,26 @@ function renderVersionList() {
     if (version.id === state.pendingVersion) button.classList.add('selected')
     if (version.id === state.settings.version) button.classList.add('current')
 
-    const indicator = document.createElement('span')
-    indicator.className = `version-indicator${version.installed ? ' installed' : ''}`
+    // 已安装的版本在列表里显示图标（自选方块 / 自定义上传）；未安装的保留小圆点
+    let indicator
+    if (version.installed || version.local) {
+      indicator = document.createElement('span')
+      indicator.className = 'version-indicator version-indicator-icon'
+      if (version.icon === 'custom') {
+        indicator.innerHTML = '<img alt="" />'
+        applyCustomVersionIcon(indicator.querySelector('img'), version.id)
+      } else {
+        indicator.innerHTML = blockIconSvg(version.icon || 'blocks/stone', 16)
+      }
+    } else {
+      indicator = document.createElement('span')
+      indicator.className = 'version-indicator'
+    }
 
     const main = document.createElement('span')
     main.className = 'version-item-main'
     const title = document.createElement('strong')
-    title.textContent = version.id
+    title.textContent = version.displayName || version.id
     const subtitle = document.createElement('span')
     const bits = version.local
       ? [
@@ -1495,6 +1664,8 @@ function updateVersionDetail() {
     dom.applyVersion.hidden = false
     dom.applyVersion.textContent = '选择一个版本'
     if (dom.downloadVersion) dom.downloadVersion.hidden = true
+    renderDetailIcon(null)
+    if (dom.detailDisplayName) dom.detailDisplayName.value = ''
     return
   }
 
@@ -1506,7 +1677,11 @@ function updateVersionDetail() {
     dom.detailType.className = `type-pill ${meta.className}`
     dom.detailType.textContent = meta.label
   }
-  dom.detailVersion.textContent = version.id
+  // 标题：有自定义显示名就用它，版本号作为副标题保留可辨识性
+  dom.detailVersion.textContent = version.displayName || version.id
+  renderDetailIcon(version)
+  renderIconPicker(version.icon || 'blocks/stone')
+  if (dom.detailDisplayName) dom.detailDisplayName.value = version.displayName || ''
   dom.detailInstalled.hidden = !version.installed
   dom.detailDate.textContent = version.local
     ? version.baseVersion
@@ -1720,9 +1895,9 @@ function renderLoaderOptions(options, errorMessage = '') {
     if (type === 'vanilla' && state.pendingLoader === 'vanilla') button.classList.add('selected')
 
     const mark = document.createElement('span')
-    mark.className = 'loader-option-mark'
-    mark.textContent =
-      type === 'vanilla' ? 'V' : type === 'fabric' ? 'F' : type === 'quilt' ? 'Q' : type === 'forge' ? 'Fo' : 'N'
+    mark.className = `loader-option-mark loader-mark-${type}`
+    // 每个加载器用自己的图形标识（内联 SVG，不额外发请求）
+    mark.innerHTML = LOADER_LOGOS[type] || LOADER_LOGOS.vanilla
 
     const copy = document.createElement('span')
     copy.className = 'loader-option-copy'
@@ -2856,7 +3031,7 @@ function updateSettingsMeta() {
   dom.aboutEml.textContent = `v${info.emlVersion}`
   dom.aboutElectron.textContent = `v${info.electron}`
   dom.aboutPlatform.textContent = `${platformName(info.platform)} · ${info.arch}`
-  dom.sideEmelVersion.textContent = info.emlVersion
+  dom.sideEmelVersion && (dom.sideEmelVersion.textContent = info.emlVersion)
 }
 
 function updateStaticInfo() {

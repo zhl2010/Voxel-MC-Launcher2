@@ -23,11 +23,14 @@
 #include "app/window.h"
 #include "core/auth.h"
 #include "core/config.h"
+#include "core/crypto.h"
 #include "core/dirs.h"
 #include "core/fs.h"
 #include "core/installer.h"
 #include "core/loader.h"
 #include "core/mods.h"
+#include "core/oauth.h"
+#include "core/vmeta.h"
 #include "core/util.h"
 #include "core/versions.h"
 #include "launch/launch.h"
@@ -411,7 +414,23 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     bridge->RegisterAsync("versions_list", [&](const nlohmann::json& args, Reply reply) {
         const bool force = args.value("force", false);
         try {
-            reply.Ok(voxel::ListVersions(Snapshot(), force));
+            nlohmann::json payload = voxel::ListVersions(Snapshot(), force);
+            // 把自定义显示名 / 图标一并带上，前端不用再拉一次
+            const nlohmann::json meta = voxel::vmeta::All();
+            if (payload.contains("versions") && payload["versions"].is_array()) {
+                for (auto& item : payload["versions"]) {
+                    const std::string id = item.value("id", std::string());
+                    if (!meta.contains(id)) continue;
+                    const auto& m = meta[id];
+                    const std::string name = m.value("displayName", std::string());
+                    if (!name.empty()) {
+                        item["displayName"] = name;
+                    }
+                    const std::string icon = m.value("icon", std::string());
+                    if (!icon.empty()) item["icon"] = icon;
+                }
+            }
+            reply.Ok(payload);
         } catch (const std::exception& error) {
             reply.Fail(std::string("版本清单获取失败：") + error.what());
         }
@@ -453,6 +472,53 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     bridge->Register("auth_logout", [&](const nlohmann::json&) {
         voxel::ClearAccount();
         return nlohmann::json(nullptr);
+    });
+
+    // ---- 第三方登录 ----
+    // Microsoft 设备码流程分两步：先取码给用户看，再在后台等授权。
+    bridge->RegisterAsync("auth_microsoft", [&](const nlohmann::json&, Reply reply) {
+        try {
+            const nlohmann::json current = Snapshot();
+            const voxel::auth::DeviceCode code =
+                voxel::auth::StartMicrosoftDeviceCode(current);
+            if (!code.ok) throw std::runtime_error(code.error);
+
+            // 把验证码推到界面，用户需要照着在浏览器里输入
+            reply.Event("game:event",
+                        EmitEnvelope("log", {{"message", "请在浏览器打开 " + code.verifyUrl +
+                                                              " 并输入代码 " + code.userCode},
+                                             {"level", "INFO"}}));
+
+            std::string error;
+            const voxel::Account account = voxel::auth::CompleteMicrosoftLogin(
+                current, code,
+                [&](const std::string& status) {
+                    reply.Event("game:event", EmitEnvelope("log", {{"message", status},
+                                                                   {"level", "INFO"}}));
+                },
+                &error);
+            if (account.IsEmpty()) throw std::runtime_error(error);
+            reply.Ok(account.ToJson());
+        } catch (const std::exception& e) {
+            reply.Fail(e.what());
+        }
+    });
+
+    bridge->RegisterAsync("auth_yggdrasil", [&](const nlohmann::json& args, Reply reply) {
+        const nlohmann::json creds =
+            args.contains("credentials") ? args["credentials"] : nlohmann::json::object();
+        try {
+            const nlohmann::json current = Snapshot();
+            std::string error;
+            const voxel::Account account = voxel::auth::YggdrasilLogin(
+                current, creds.value("server", std::string()),
+                creds.value("username", std::string()), creds.value("password", std::string()),
+                &error);
+            if (account.IsEmpty()) throw std::runtime_error(error);
+            reply.Ok(account.ToJson());
+        } catch (const std::exception& e) {
+            reply.Fail(e.what());
+        }
     });
 
     bridge->Register("skin_get", [&](const nlohmann::json&) {
@@ -538,6 +604,51 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
         }
         ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         return nlohmann::json::object();
+    });
+
+    // ---- 版本显示名与自定义图标 ----
+    // 只覆盖"显示"，不改 versions/<id>/<id>.json 里的 id（那是继承链的权威标识）。
+    bridge->Register("versions_meta", [&](const nlohmann::json&) {
+        return voxel::vmeta::All();
+    });
+
+    bridge->Register("versions_rename", [&](const nlohmann::json& args) {
+        const std::string id = args.value("versionId", std::string());
+        if (!voxel::SafeVersionId(id)) throw std::runtime_error("版本名非法");
+        voxel::vmeta::Meta meta = voxel::vmeta::Load(id);
+        if (args.contains("displayName") && args["displayName"].is_string()) {
+            std::string name = args["displayName"].get<std::string>();
+            if (name.size() > 64) name.resize(64);
+            meta.displayName = name;
+        }
+        if (args.contains("icon") && args["icon"].is_string()) {
+            meta.icon = args["icon"].get<std::string>();
+        }
+        if (!voxel::vmeta::Save(id, meta)) throw std::runtime_error("保存失败");
+        return nlohmann::json{{"versionId", id},
+                              {"displayName", meta.displayName},
+                              {"icon", meta.icon}};
+    });
+
+    bridge->Register("versions_set_icon", [&](const nlohmann::json& args) {
+        const std::string id = args.value("versionId", std::string());
+        if (!voxel::SafeVersionId(id)) throw std::runtime_error("版本名非法");
+        const std::wstring file = voxel::PickPngFile(window.Handle());
+        if (file.empty()) return nlohmann::json{{"cancelled", true}};
+        const std::string bytes = voxel::fs::ReadText(file);
+        std::string error;
+        if (!voxel::vmeta::SaveIcon(id, bytes, &error)) {
+            throw std::runtime_error(error.empty() ? "图标保存失败" : error);
+        }
+        return nlohmann::json{{"ok", true}, {"icon", "custom"}};
+    });
+
+    bridge->Register("versions_icon", [&](const nlohmann::json& args) {
+        const std::string id = args.value("versionId", std::string());
+        if (!voxel::SafeVersionId(id)) return nlohmann::json(nullptr);
+        const std::string bytes = voxel::vmeta::LoadIcon(id);
+        if (bytes.empty()) return nlohmann::json(nullptr);
+        return nlohmann::json("data:image/png;base64," + voxel::crypto::Base64Encode(bytes));
     });
 
     // ---- 启动与校验 ----

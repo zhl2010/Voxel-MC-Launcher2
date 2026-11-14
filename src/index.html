@@ -149,11 +149,7 @@
 
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-cube" aria-hidden="true">
-            <span class="cube-top"></span>
-            <span class="cube-left"></span>
-            <span class="cube-right"></span>
-          </div>
+          <img class="brand-logo" src="icon.png" alt="" aria-hidden="true" />
           <div class="brand-type">
             <strong>VOXEL</strong>
             <span>LAUNCHER</span>
@@ -204,8 +200,7 @@
           <svg><use href="#i-chevron"></use></svg>
         </button>
         <div class="sidebar-foot">
-          <span>eml-lib</span>
-          <span id="sideEmelVersion">2.7.4</span>
+          <span>Voxel Launcher</span>
         </div>
       </aside>
 
@@ -398,11 +393,24 @@
 
             <aside class="version-detail panel">
               <div class="detail-heading">
-                <div>
-                  <span class="detail-caption">MINECRAFT JAVA EDITION</span>
-                  <h2 id="detailVersion">选择一个版本</h2>
+                <div class="detail-title-row">
+                  <span id="detailIcon" class="detail-icon" aria-hidden="true"></span>
+                  <div>
+                    <span class="detail-caption">MINECRAFT JAVA EDITION</span>
+                    <h2 id="detailVersion">选择一个版本</h2>
+                  </div>
                 </div>
                 <span id="detailInstalled" class="installed-pill" hidden><svg><use href="#i-check"></use></svg>已安装</span>
+              </div>
+
+              <!-- 自定义版本名与图标 -->
+              <div class="detail-customize">
+                <label class="customize-field">
+                  <span>显示名称</span>
+                  <input id="detailDisplayName" type="text" maxlength="64" placeholder="留空则用版本号" spellcheck="false" />
+                </label>
+                <div class="customize-icons" id="detailIconPicker" role="group" aria-label="选择版本图标"></div>
+                <button id="detailUploadIcon" class="ghost-btn small">上传自定义图标</button>
               </div>
               <p id="detailDate" class="detail-date">从左侧列表中选择版本，查看安装信息。</p>
 

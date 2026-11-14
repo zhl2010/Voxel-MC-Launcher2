@@ -20,7 +20,9 @@
 namespace voxel {
 namespace {
 
-constexpr int PARALLEL_DOWNLOADS = 8;
+// 并发下载数。资源文件大多很小（几 KB～几十 KB），瓶颈在往返延迟而不是带宽；
+// 连接复用之后单个请求约 30–50ms，32 并发能把这部分开销摊平。
+constexpr int PARALLEL_DOWNLOADS = 32;
 
 bool UnsafeIdChar(char ch) {
     return ch == '\\' || ch == '/' || ch == ':' || ch == '*' || ch == '?' || ch == '"' ||

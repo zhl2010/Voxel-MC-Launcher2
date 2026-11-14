@@ -245,6 +245,18 @@
     deleteVersion: function (versionId) {
       return call('versions_delete', { versionId: versionId })
     },
+    getVersionMeta: function () {
+      return call('versions_meta')
+    },
+    renameVersion: function (versionId, displayName, icon) {
+      return call('versions_rename', { versionId: versionId, displayName: displayName, icon: icon })
+    },
+    setVersionIcon: function (versionId) {
+      return call('versions_set_icon', { versionId: versionId })
+    },
+    getVersionIcon: function (versionId) {
+      return call('versions_icon', { versionId: versionId })
+    },
     openVersionFolder: function (versionId) {
       return call('versions_open_folder', { versionId: versionId })
     },

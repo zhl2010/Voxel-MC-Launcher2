@@ -6,6 +6,8 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <fstream>
+#include <map>
+#include <mutex>
 #include <string>
 
 #pragma comment(lib, "winhttp.lib")
@@ -73,6 +75,63 @@ std::wstring NormalizeProxy(const std::string& proxyUrl) {
     return raw;
 }
 
+// 连接复用：原实现每个文件都 WinHttpOpen + WinHttpConnect，等于每个文件重做一次
+// TLS 握手。实测单文件的握手开销约 1 秒，5000 个资源文件在 8 并发下要 10 分钟以上，
+// 而真正传数据的时间占比很小。
+//
+// 这里按 (proxy, host, port) 缓存 WinHTTP 会话与连接句柄，后续请求直接复用。
+// 句柄在进程生命周期内不释放（数量极少：资源站、maven、meta 各一个），
+// 由进程退出统一回收。
+std::mutex g_handleMutex;
+std::map<std::wstring, HINTERNET> g_sessions;
+std::map<std::wstring, HINTERNET> g_connections;
+
+HINTERNET GetSession(const std::wstring& proxyText) {
+    std::lock_guard<std::mutex> lock(g_handleMutex);
+    const std::wstring key = proxyText;
+    auto it = g_sessions.find(key);
+    if (it != g_sessions.end()) return it->second;
+
+    HINTERNET session = WinHttpOpen(
+        L"VoxelLauncher/1.2 (Windows)",
+        proxyText.empty() ? WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY : WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+        proxyText.empty() ? WINHTTP_NO_PROXY_NAME : proxyText.c_str(),
+        WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session) {
+        // 自动代理在某些精简系统上不可用，退回到直连
+        session = WinHttpOpen(L"VoxelLauncher/1.2 (Windows)", WINHTTP_ACCESS_TYPE_NO_PROXY,
+                              WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    }
+    if (!session) return nullptr;
+
+    WinHttpSetTimeouts(session, CONNECT_TIMEOUT_MS, CONNECT_TIMEOUT_MS, SEND_TIMEOUT_MS,
+                       RECEIVE_TIMEOUT_MS);
+    // WinHTTP 默认每个主机只保留少量连接；不抬高这个值，32 个下载线程会挤在
+    // 少数连接上排队，等于没有并发。
+    DWORD maxPerServer = 32;
+    WinHttpSetOption(session, WINHTTP_OPTION_MAX_CONNS_PER_SERVER, &maxPerServer,
+                     sizeof(maxPerServer));
+    WinHttpSetOption(session, WINHTTP_OPTION_MAX_CONNS_PER_1_0_SERVER, &maxPerServer,
+                     sizeof(maxPerServer));
+
+    g_sessions[key] = session;
+    return session;
+}
+
+HINTERNET GetConnection(HINTERNET session, const std::wstring& proxyText,
+                        const UrlParts& parts) {
+    std::lock_guard<std::mutex> lock(g_handleMutex);
+    const std::wstring key = proxyText + L"|" + parts.host + L"|" + std::to_wstring(parts.port);
+    auto it = g_connections.find(key);
+    if (it != g_connections.end()) return it->second;
+
+    HINTERNET connect = WinHttpConnect(session, parts.host.c_str(),
+                                       static_cast<INTERNET_PORT>(parts.port), 0);
+    if (!connect) return nullptr;
+    g_connections[key] = connect;
+    return connect;
+}
+
 // 一次完整请求。body 写到 outText（内存）或 outStream（文件）。
 bool RequestOnce(const std::wstring& url, const std::string& proxy, std::string* outText,
                  std::ostream* outStream, const std::function<void(uint64_t)>* onChunk,
@@ -84,29 +143,15 @@ bool RequestOnce(const std::wstring& url, const std::string& proxy, std::string*
     }
 
     const std::wstring proxyText = NormalizeProxy(proxy);
-    HINTERNET session = WinHttpOpen(
-        L"VoxelLauncher/1.2 (Windows)",
-        proxyText.empty() ? WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY : WINHTTP_ACCESS_TYPE_NAMED_PROXY,
-        proxyText.empty() ? WINHTTP_NO_PROXY_NAME : proxyText.c_str(),
-        WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session) {
-        // 自动代理在某些精简系统上不可用，退回到直连
-        session = WinHttpOpen(L"VoxelLauncher/1.2 (Windows)", WINHTTP_ACCESS_TYPE_NO_PROXY,
-                              WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    }
+    HINTERNET session = GetSession(proxyText);
     if (!session) {
         if (error) *error = L"WinHTTP 会话创建失败";
         return false;
     }
 
-    WinHttpSetTimeouts(session, CONNECT_TIMEOUT_MS, CONNECT_TIMEOUT_MS, SEND_TIMEOUT_MS,
-                       RECEIVE_TIMEOUT_MS);
-
-    HINTERNET connect = WinHttpConnect(session, parts.host.c_str(),
-                                       static_cast<INTERNET_PORT>(parts.port), 0);
+    HINTERNET connect = GetConnection(session, proxyText, parts);
     if (!connect) {
         if (error) *error = L"无法连接 " + parts.host;
-        WinHttpCloseHandle(session);
         return false;
     }
 
@@ -115,8 +160,8 @@ bool RequestOnce(const std::wstring& url, const std::string& proxy, std::string*
         WINHTTP_DEFAULT_ACCEPT_TYPES, parts.secure ? WINHTTP_FLAG_SECURE : 0);
     if (!request) {
         if (error) *error = L"请求创建失败";
-        WinHttpCloseHandle(connect);
-        WinHttpCloseHandle(session);
+        // connect / session 是缓存句柄，不能关
+        // session 由缓存持有，进程退出时统一回收
         return false;
     }
 
@@ -127,8 +172,8 @@ bool RequestOnce(const std::wstring& url, const std::string& proxy, std::string*
                           sizeof(redirectPolicy))) {
         if (error) *error = L"无法设置重定向策略";
         WinHttpCloseHandle(request);
-        WinHttpCloseHandle(connect);
-        WinHttpCloseHandle(session);
+        // connect / session 是缓存句柄，不能关
+        // session 由缓存持有，进程退出时统一回收
         return false;
     }
 
@@ -199,8 +244,8 @@ bool RequestOnce(const std::wstring& url, const std::string& proxy, std::string*
     }
 
     WinHttpCloseHandle(request);
-    WinHttpCloseHandle(connect);
-    WinHttpCloseHandle(session);
+    // connect / session 复用，不在此关闭
+    // session 复用，不在此关闭
     return ok;
 }
 
