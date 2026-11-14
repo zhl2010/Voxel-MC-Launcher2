@@ -167,6 +167,9 @@ void TestVerify(const nlohmann::json& settings, const std::wstring& gameDir,
          " repaired=" + std::to_string(IntOf(result, "repaired")) +
          " remaining=" + std::to_string(IntOf(result, "remaining")) + " in " +
          std::to_string(static_cast<int>(seconds)) + "s");
+    // 失败时把原因显式打出来，否则只看到 remaining 不变、无从判断是网络还是磁盘
+    const std::string verifyError = StrOf(result, "error");
+    if (!verifyError.empty()) Line("[verify] error: " + verifyError);
     if (result.contains("notes") && result["notes"].is_array()) {
         for (const auto& note : result["notes"]) {
             if (note.is_string()) Line("[verify] note: " + note.get<std::string>());
