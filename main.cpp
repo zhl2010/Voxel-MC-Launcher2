@@ -30,6 +30,7 @@
 #include "core/loader.h"
 #include "core/mods.h"
 #include "core/oauth.h"
+#include "core/skin.h"
 #include "core/vmeta.h"
 #include "core/util.h"
 #include "core/versions.h"
@@ -534,9 +535,21 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
         return voxel::SkinInfo();
     });
 
-    bridge->Register("skin_face", [&](const nlohmann::json&) {
-        // 离线账户没有在线皮肤，交给前端画像素头像
-        return nlohmann::json(nullptr);
+    bridge->RegisterAsync("skin_face", [&](const nlohmann::json&, Reply reply) {
+        // 在线账户（Microsoft / Yggdrasil）的头像需要联网取，所以是异步命令。
+        // 离线账户直接返回 null，由前端用内置的 Steve / Alex 头像。
+        voxel::Account account;
+        if (!voxel::LoadAccount(account) || account.IsEmpty() || account.type == "crack") {
+            reply.Ok(nlohmann::json(nullptr));
+            return;
+        }
+        try {
+            const std::string data = voxel::skin::OnlineFaceDataUrl(Snapshot(), account);
+            reply.Ok(data.empty() ? nlohmann::json(nullptr) : nlohmann::json(data));
+        } catch (const std::exception& error) {
+            // 取头像失败不该打断界面，返回 null 让前端回退到默认皮肤
+            reply.Ok(nlohmann::json(nullptr));
+        }
     });
 
     bridge->Register("skin_upload", [&](const nlohmann::json&) {

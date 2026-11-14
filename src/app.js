@@ -3486,12 +3486,31 @@ async function loadSkin() {
   }
   renderSkinPresets()
   try {
-    state.onlineFace = (await invoke(api.getAccountFace())) || ''
+    // 在线头像要联网（Microsoft 走 Crafatar，Yggdrasil 走站点签名纹理）。
+    // 给它 6 秒上限：网络不通时不能让启动界面一直等，超时就回退默认皮肤。
+    state.onlineFace = (await withTimeout(invoke(api.getAccountFace()), 6000)) || ''
   } catch {
     state.onlineFace = ''
   }
   renderAccount()
   if (dom.clearSkin) dom.clearSkin.hidden = !state.skinDataUrl
+}
+
+/** 给 Promise 套一个超时，超时后 reject。 */
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
 }
 
 function setSkinFeedback(text, kind = '') {
