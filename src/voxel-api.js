@@ -96,7 +96,7 @@
     uiScale: 100,
     fontScale: 100,
     accentColor: '#eef0ea',
-    themeMode: 'dark',
+    themeMode: 'light',
     gameDir: '',
     proxyUrl: '',
     mirrorMojang: true,
