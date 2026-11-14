@@ -714,7 +714,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
         voxel::vmeta::Meta meta = voxel::vmeta::Load(id);
         if (args.contains("displayName") && args["displayName"].is_string()) {
             std::string name = args["displayName"].get<std::string>();
-            if (name.size() > 64) name.resize(64);
+            // 按 UTF-8 字符边界截断。直接 resize(64) 会把「一个汉字三个字节」从中间切断，
+            // 得到非法 UTF-8，之后 dump 成 JSON 会抛异常，这个名字就永远存不进去。
+            if (name.size() > 64) {
+                size_t cut = 64;
+                while (cut > 0 && (static_cast<unsigned char>(name[cut]) & 0xC0) == 0x80) --cut;
+                name.resize(cut);
+            }
             meta.displayName = name;
         }
         if (args.contains("icon") && args["icon"].is_string()) {

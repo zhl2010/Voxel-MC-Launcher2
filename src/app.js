@@ -480,6 +480,11 @@ function bindHome() {
   // 自定义版本名与图标
   if (dom.detailDisplayName) {
     dom.detailDisplayName.addEventListener('blur', () => commitDisplayName())
+    // 记住用户是否真的改过名字：新建实例/装加载器时只有这里被编辑过才拿它当实例名，
+    // 否则沿用后端自动编号，避免把版本的显示名（比如「我的 1.21」）误当成目录名。
+    dom.detailDisplayName.addEventListener('input', () => {
+      dom.detailDisplayName.dataset.dirty = '1'
+    })
     dom.detailDisplayName.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
         event.preventDefault()
@@ -653,14 +658,13 @@ async function handleDownloadVersion() {
   const wasInstalled = Boolean(sourceVersion?.installed || sourceVersion?.local)
 
   if (wasInstalled) {
-    // 已安装：新建一个继承自它的实例，而不是原地修补
-    const input = window.prompt(
-      `版本 ${id} 已安装。\n新建一个同配置实例（共享游戏文件，不额外占空间），可输入实例名：`,
-      ''
-    )
-    if (input === null) return // 用户取消
+    // 已安装：新建一个继承自它的实例，而不是原地修补。
+    // 实例名直接取右侧详情里的「显示名称」输入框，不再弹原生 prompt：
+    // 只有用户真的改过这里才用它，留空则由后端按 <版本>-2、-3 自动编号。
+    const edited = dom.detailDisplayName && dom.detailDisplayName.dataset.dirty === '1'
+    const nameInput = edited ? dom.detailDisplayName.value.trim() : ''
     try {
-      const created = await invoke(api.createInstance({ source: id, name: input.trim() }))
+      const created = await invoke(api.createInstance({ source: id, name: nameInput }))
       appendLog('INFO', `已创建实例 ${created.id}（基于 ${id}）`)
       id = created.id
     } catch (error) {
@@ -1821,7 +1825,10 @@ function updateVersionDetail() {
       dom.downloadVersion.textContent = '下载此版本'
     }
     renderDetailIcon(null)
-    if (dom.detailDisplayName) dom.detailDisplayName.value = ''
+    if (dom.detailDisplayName) {
+      dom.detailDisplayName.value = ''
+      delete dom.detailDisplayName.dataset.dirty
+    }
     return
   }
 
@@ -1837,7 +1844,10 @@ function updateVersionDetail() {
   dom.detailVersion.textContent = version.displayName || version.id
   renderDetailIcon(version)
   renderIconPicker(version.icon || 'blocks/stone')
-  if (dom.detailDisplayName) dom.detailDisplayName.value = version.displayName || ''
+  if (dom.detailDisplayName) {
+    dom.detailDisplayName.value = version.displayName || ''
+    delete dom.detailDisplayName.dataset.dirty
+  }
   dom.detailInstalled.hidden = !version.installed
   // 标题下方永远显示"真身"：自定义名遮不住它实际是什么版本 + 什么加载器
   dom.detailDate.textContent = versionIdentity(version)
@@ -1985,16 +1995,11 @@ async function installLoaderInstance(mc, loader, loaderVersion) {
 
   // 装之前先让用户给实例起个名字。
   // 同一个游戏版本装两次同一加载器（比如两个 Fabric 版本做对照）时，
-  // 默认目录名会撞车，靠自定义名区分。留空就用默认名。
+  // 默认目录名会撞车，靠自定义名区分。名字取自右侧「显示名称」输入框，
+  // 没改就留空，交给后端生成标准实例名。
   const defaultName = `${mc}-${loader}-${loaderVersion || ''}`.replace(/-+$/, '')
-  const customName = window.prompt(
-    `为这个实例起个名字（可直接用默认值）\n\n${mc} · ${loaderDisplay(loader)} ${loaderVersion || '最新'}`,
-    defaultName
-  )
-  if (customName === null) return // 用户取消
-
-  const trimmed = customName.trim()
-  // 名字与默认值相同时不传，交给后端生成标准实例名
+  const edited = dom.detailDisplayName && dom.detailDisplayName.dataset.dirty === '1'
+  const trimmed = edited ? dom.detailDisplayName.value.trim() : ''
   const finalName = trimmed && trimmed !== defaultName ? trimmed : ''
 
   state.installingLoader = true
