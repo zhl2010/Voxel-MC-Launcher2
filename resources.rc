@@ -1,0 +1,13 @@
+// 前端资源内嵌脚本。
+//
+// 目的是让发布产物成为单个 exe：不再需要 exe 旁边放一个 src/ 目录。
+// 这些资源以 RT_RCDATA 形式编进 PE，运行时由 WebView2 的 WebResourceRequested
+// 从内存直接应答（见 app/webview.cpp）。
+//
+// 资源 ID 与 app/assets.cpp 里的表一一对应，改这里必须同步改那边。
+#include <windows.h>
+
+101 RCDATA "src\\index.html"
+102 RCDATA "src\\styles.css"
+103 RCDATA "src\\app.js"
+104 RCDATA "src\\voxel-api.js"

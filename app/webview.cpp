@@ -1,10 +1,17 @@
 #include "webview.h"
 
+#include "assets.h"
+
 #include <shlobj.h>
+#include <shlwapi.h>
+
+#include <string>
+#include <vector>
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "shlwapi.lib")
 
 namespace {
 
@@ -23,6 +30,20 @@ bool PumpUntil(HANDLE ev, DWORD timeoutMs) {
         }
     }
     return false;
+}
+
+// https://voxel.local/a/b.css?x=1 → "a/b.css"；空路径视为 index.html
+std::wstring AssetNameFromUri(const std::wstring& uri) {
+    const size_t scheme = uri.find(L"://");
+    const size_t cursor = scheme == std::wstring::npos ? 0 : scheme + 3;
+    const size_t slash = uri.find(L'/', cursor);
+    if (slash == std::wstring::npos) return L"index.html";
+
+    std::wstring path = uri.substr(slash + 1);
+    const size_t cut = path.find_first_of(L"?#");
+    if (cut != std::wstring::npos) path.resize(cut);
+    if (path.empty()) return L"index.html";
+    return path;
 }
 
 }  // namespace
@@ -157,19 +178,40 @@ bool WebViewHost::CreateInternal(HWND parent,
         return false;
     }
 
-    // ---- 3. 前端目录映射成 https 虚拟主机 ----
-    // 这个 API 位于 ICoreWebView2_3（web 侧接口），只能在拿到 web 之后调用。
+    // ---- 3. 前端资源：优先用编进 exe 的内嵌副本，从内存应答 ----
+    // 这样发布产物是单个 exe，不依赖旁边的 src/ 目录；只有内嵌缺失
+    // （或运行时太旧、拿不到 WebResourceRequested）时才退回目录映射。
     std::wstring navigateTo = startUrl;
-    Microsoft::WRL::ComPtr<ICoreWebView2_3> web3;
-    if (SUCCEEDED(web_.As(&web3)) && web3) {
-        web3->SetVirtualHostNameToFolderMapping(
-            virtualHost.c_str(), srcDir.c_str(),
-            COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
-    } else {
-        // 运行时过旧：退回 file:///，至少界面能出来
-        std::wstring fb = L"file:///" + srcDir + L"/index.html";
-        for (auto& ch : fb) if (ch == L'\\') ch = L'/';
-        navigateTo = fb;
+    bool servedFromMemory = false;
+    if (HasEmbeddedAssets()) {
+        const std::wstring pattern = L"https://" + virtualHost + L"/*";
+        web_->AddWebResourceRequestedFilter(pattern.c_str(),
+                                            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+        auto resourceHandler =
+            Microsoft::WRL::Callback<ICoreWebView2WebResourceRequestedEventHandler>(
+                [this](ICoreWebView2* /*sender*/,
+                       ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+                    return ServeEmbedded(args);
+                });
+        if (resourceHandler &&
+            SUCCEEDED(web_->add_WebResourceRequested(resourceHandler.Get(), &resourceToken_))) {
+            servedFromMemory = true;
+        }
+    }
+
+    if (!servedFromMemory) {
+        // 兜底路径：目录映射 → 再不行退回 file:///
+        Microsoft::WRL::ComPtr<ICoreWebView2_3> web3;
+        if (SUCCEEDED(web_.As(&web3)) && web3) {
+            web3->SetVirtualHostNameToFolderMapping(
+                virtualHost.c_str(), srcDir.c_str(),
+                COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+        } else {
+            // 运行时过旧：退回 file:///，至少界面能出来
+            std::wstring fb = L"file:///" + srcDir + L"/index.html";
+            for (auto& ch : fb) if (ch == L'\\') ch = L'/';
+            navigateTo = fb;
+        }
     }
 
     // ---- 4. 打开非客户区支持，让 CSS 的 -webkit-app-region 生效 ----
@@ -201,6 +243,10 @@ void WebViewHost::Navigate(const std::wstring& url) {
 }
 
 void WebViewHost::Shutdown() {
+    if (web_ && resourceToken_.value != 0) {
+        web_->remove_WebResourceRequested(resourceToken_);
+        resourceToken_ = EventRegistrationToken{};
+    }
     if (controller_) {
         controller_->Close();
         controller_.Reset();
@@ -211,4 +257,46 @@ void WebViewHost::Shutdown() {
         DestroyWindow(host_);
         host_ = nullptr;
     }
+}
+
+HRESULT WebViewHost::ServeEmbedded(ICoreWebView2WebResourceRequestedEventArgs* args) {
+    if (!args || !env_) return E_FAIL;
+
+    Microsoft::WRL::ComPtr<ICoreWebView2WebResourceRequest> request;
+    if (FAILED(args->get_Request(&request)) || !request) return E_FAIL;
+
+    LPWSTR uri = nullptr;
+    if (FAILED(request->get_Uri(&uri)) || !uri) return E_FAIL;
+    const std::wstring name = AssetNameFromUri(uri);
+    CoTaskMemFree(uri);
+
+    std::vector<unsigned char> data;
+    std::wstring mime;
+    const bool found = EmbeddedAsset(name, data, mime);
+
+    IStream* stream = nullptr;
+    int status = 200;
+    std::wstring reason = L"OK";
+    std::wstring headers;
+    if (found) {
+        if (!data.empty()) {
+            stream = SHCreateMemStream(data.data(), static_cast<UINT>(data.size()));
+        }
+        headers = L"Content-Type: " + mime + L"\r\nCache-Control: no-store\r\n";
+    } else {
+        static const char kNotFound[] = "404 not found";
+        stream = SHCreateMemStream(reinterpret_cast<const BYTE*>(kNotFound),
+                                   static_cast<UINT>(sizeof(kNotFound) - 1));
+        status = 404;
+        reason = L"Not Found";
+        headers = L"Content-Type: text/plain; charset=utf-8\r\n";
+    }
+    if (!stream) return E_FAIL;
+
+    Microsoft::WRL::ComPtr<ICoreWebView2WebResourceResponse> response;
+    const HRESULT hr = env_->CreateWebResourceResponse(stream, status, reason.c_str(),
+                                                       headers.c_str(), &response);
+    stream->Release();
+    if (FAILED(hr) || !response) return hr;
+    return args->put_Response(response.Get());
 }

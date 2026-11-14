@@ -13,6 +13,13 @@ set "OUT=%ROOT%build"
 if not exist "%OUT%" mkdir "%OUT%"
 if not exist "%OUT%\obj" mkdir "%OUT%\obj"
 
+echo [build] embedding frontend resources...
+"%WINSDK%\bin\%SDKVER%\x64\rc.exe" /nologo /fo "%OUT%\obj\resources.res" "%ROOT%resources.rc"
+if errorlevel 1 (
+  echo [build] FAILED: 资源编译失败
+  exit /b 1
+)
+
 echo [build] compiling native host...
 cl /nologo /std:c++20 /utf-8 /EHsc /O2 /W3 /MD /DUNICODE /D_UNICODE /DNOMINMAX ^
    /I"%ROOT%." ^
@@ -26,6 +33,7 @@ cl /nologo /std:c++20 /utf-8 /EHsc /O2 /W3 /MD /DUNICODE /D_UNICODE /DNOMINMAX ^
    "%ROOT%app\window.cpp" ^
    "%ROOT%app\webview.cpp" ^
    "%ROOT%app\bridge.cpp" ^
+   "%ROOT%app\assets.cpp" ^
    "%ROOT%core\config.cpp" ^
    "%ROOT%core\versions.cpp" ^
    "%ROOT%core\crypto.cpp" ^
@@ -36,6 +44,7 @@ cl /nologo /std:c++20 /utf-8 /EHsc /O2 /W3 /MD /DUNICODE /D_UNICODE /DNOMINMAX ^
    "%ROOT%core\installer.cpp" ^
    "%ROOT%net\http.cpp" ^
    "%ROOT%launch\launch.cpp" ^
+   "%OUT%\obj\resources.res" ^
    /Fo"%OUT%\obj\\" ^
    /Fe"%OUT%\voxel-launcher.exe" ^
    /link /SUBSYSTEM:WINDOWS ^

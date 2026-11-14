@@ -48,6 +48,10 @@ private:
 
     static std::wstring UserDataDir();
 
+    // 从内嵌资源应答一次 https://voxel.local/* 请求。
+    // 有了它，发布产物才能是单 exe，不必在旁边放 src/ 目录。
+    HRESULT ServeEmbedded(ICoreWebView2WebResourceRequestedEventArgs* args);
+
     // 把 <dir> 改名成 <dir>.corrupt-<tick>，成功返回 true。
     // 数据目录一旦被上一次异常退出写坏，WebView2 会持续返回 ERROR_BUSY，
     // 单纯重试没用；挪走让它重建是唯一不需要管理员权限的修法。
@@ -58,6 +62,7 @@ private:
 
     HWND parent_ = nullptr;
     HWND host_ = nullptr;
+    EventRegistrationToken resourceToken_{};
     Microsoft::WRL::ComPtr<ICoreWebView2Environment> env_;
     Microsoft::WRL::ComPtr<ICoreWebView2Controller> controller_;
     Microsoft::WRL::ComPtr<ICoreWebView2> web_;

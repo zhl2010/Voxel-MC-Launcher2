@@ -8,14 +8,22 @@ Minecraft 启动器的 **C++ / WebView2** 实现的延续（旧 Electron 版：[
 
 ```
 main.cpp          宿主入口：窗口、单实例、IPC 命令表
-app/              窗口、WebView2 宿主、与前端之间的 IPC 桥
+app/              窗口、WebView2 宿主、内嵌资源、与前端之间的 IPC 桥
 core/             配置、清单、账户、目录、加密、安装器、进程
 net/              WinHTTP 封装
 launch/           版本解析、classpath、参数拼装、进程拉起
-src/              前端（旧版原样搬入）
+src/              前端源码（构建时编进 exe，发布产物不需要它）
+resources.rc      把 src/ 下的四个文件以 RCDATA 形式嵌入
 tools/            无界面自检（不进发布产物）
 third_party/      WebView2 SDK、nlohmann::json
 ```
+
+## 单体 exe
+
+构建产物 `build\voxel-launcher.exe` 是**单文件**：前端（`index.html` / `styles.css` /
+`app.js` / `voxel-api.js`）由 `resources.rc` 编进 PE，运行时通过 WebView2 的
+`WebResourceRequested` 从内存应答 `https://voxel.local/*`，不再需要 exe 旁边的
+`src/` 目录。改了前端必须重新编译，否则 exe 里还是旧资源。
 
 ## 开发
 
