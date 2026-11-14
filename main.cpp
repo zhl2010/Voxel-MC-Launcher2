@@ -26,6 +26,7 @@
 #include "core/dirs.h"
 #include "core/fs.h"
 #include "core/installer.h"
+#include "core/loader.h"
 #include "core/util.h"
 #include "core/versions.h"
 #include "launch/launch.h"
@@ -303,6 +304,16 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
         return next;
     });
 
+    // ---- 界面缩放 ----
+    // WebView2 的缩放由宿主控制（ICoreWebView2Controller::put_ZoomFactor），
+    // 页面里没有也做不到。原实现只把 uiScale 存进配置、从不真正应用，
+    // 导致设置里的滑杆"看起来能拖，实际没反应"。
+    auto ApplyUiScale = [&](int scale) {
+        if (!webview.Controller()) return;
+        int clamped = scale < 50 ? 50 : (scale > 200 ? 200 : scale);
+        webview.Controller()->put_ZoomFactor(static_cast<double>(clamped) / 100.0);
+    };
+
     bridge->Register("ui_set_scale", [&](const nlohmann::json& args) {
         const int value = args.value("value", 100);
         {
@@ -310,7 +321,36 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
             settings["uiScale"] = value;
             voxel::SaveSettings(settings);
         }
+        ApplyUiScale(value);
         return nlohmann::json(value);
+    });
+
+    // 启动时把已保存的缩放值应用上，否则重开启动器会回到 100%
+    ApplyUiScale(settings.value("uiScale", 100));
+
+    // ---- 模组加载器 ----
+    bridge->RegisterAsync("loaders_list", [&](const nlohmann::json& args, Reply reply) {
+        const std::string mcVersion = args.value("mcVersion", std::string());
+        try {
+            reply.Ok(voxel::loader::ListLoaders(Snapshot(), mcVersion));
+        } catch (const std::exception& error) {
+            reply.Fail(std::string("加载器列表获取失败：") + error.what());
+        }
+    });
+
+    bridge->RegisterAsync("loader_install", [&](const nlohmann::json& args, Reply reply) {
+        const nlohmann::json payload =
+            args.contains("payload") ? args["payload"] : nlohmann::json::object();
+        const std::string mcVersion = payload.value("gameVersion", std::string());
+        const std::string loader = payload.value("loader", std::string());
+        const std::string loaderVersion = payload.value("loaderVersion", std::string());
+        try {
+            const nlohmann::json current = Snapshot();
+            reply.Ok(voxel::loader::InstallLoader(current, voxel::ResolveGameDir(current),
+                                                  mcVersion, loader, loaderVersion));
+        } catch (const std::exception& error) {
+            reply.Fail(error.what());
+        }
     });
 
     // ---- 版本清单（要联网，走工作线程）----

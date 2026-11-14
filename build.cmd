@@ -42,6 +42,7 @@ cl /nologo /std:c++20 /utf-8 /EHsc /O2 /W3 /MD /DUNICODE /D_UNICODE /DNOMINMAX ^
    "%ROOT%core\dirs.cpp" ^
    "%ROOT%core\proc.cpp" ^
    "%ROOT%core\installer.cpp" ^
+   "%ROOT%core\loader.cpp" ^
    "%ROOT%net\http.cpp" ^
    "%ROOT%launch\launch.cpp" ^
    "%OUT%\obj\resources.res" ^
