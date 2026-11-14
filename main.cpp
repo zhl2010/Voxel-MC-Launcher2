@@ -536,18 +536,19 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     });
 
     bridge->RegisterAsync("skin_face", [&](const nlohmann::json&, Reply reply) {
-        // 在线账户（Microsoft / Yggdrasil）的头像需要联网取，所以是异步命令。
-        // 离线账户直接返回 null，由前端用内置的 Steve / Alex 头像。
+        // 在线账户（Microsoft / Yggdrasil）的皮肤需要联网取，所以是异步命令。
+        // 返回的是**整张皮肤**（data URL），由前端裁出 8×8 头部——
+        // 后端没有图像解码能力，而前端 canvas 做这件事最直接。
         voxel::Account account;
         if (!voxel::LoadAccount(account) || account.IsEmpty() || account.type == "crack") {
             reply.Ok(nlohmann::json(nullptr));
             return;
         }
         try {
-            const std::string data = voxel::skin::OnlineFaceDataUrl(Snapshot(), account);
+            const std::string data = voxel::skin::OnlineSkinDataUrl(Snapshot(), account);
             reply.Ok(data.empty() ? nlohmann::json(nullptr) : nlohmann::json(data));
         } catch (const std::exception& error) {
-            // 取头像失败不该打断界面，返回 null 让前端回退到默认皮肤
+            // 取皮肤失败不该打断界面，返回 null 让前端回退到默认皮肤
             reply.Ok(nlohmann::json(nullptr));
         }
     });

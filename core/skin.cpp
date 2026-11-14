@@ -117,26 +117,25 @@ std::string ToDataUrl(const std::string& png) {
 
 std::string OnlineSkinDataUrl(const nlohmann::json& settings, const Account& account) {
     if (account.type == "crack" || account.IsEmpty()) return std::string();
+
+    // 1) 令牌直连拿官方皮肤（Yggdrasil 的签名纹理最准）
     std::string png;
-    if (!FetchSkinViaToken(settings, account, png)) return std::string();
-    return ToDataUrl(png);
-}
-
-std::string OnlineFaceDataUrl(const nlohmann::json& settings, const Account& account) {
-    // 离线账户没有在线皮肤，交给内置的 Steve / Alex
-    if (account.type == "crack" || account.IsEmpty()) return std::string();
-
-    // 先用令牌拿到完整皮肤再裁头，分辨率最高；失败就退回 Crafatar
-    std::string skin;
-    if (FetchSkinViaToken(settings, account, skin)) {
-        return ToDataUrl(skin);
+    if (FetchSkinViaToken(settings, account, png)) {
+        return ToDataUrl(png);
     }
 
+    // 2) 回退 Crafatar。它给的是头像不是整张皮肤，但前端裁头逻辑对两者都成立
+    //    （小图会等比放大），所以这里直接返回即可。
     std::string face;
     if (FetchFaceViaCrafatar(settings, account, face)) {
         return ToDataUrl(face);
     }
     return std::string();
+}
+
+std::string OnlineFaceDataUrl(const nlohmann::json& settings, const Account& account) {
+    // 头像和皮肤走同一条链路；真正的裁剪在前端 canvas 完成
+    return OnlineSkinDataUrl(settings, account);
 }
 
 }  // namespace voxel::skin

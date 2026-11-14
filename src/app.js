@@ -3395,12 +3395,23 @@ function showLoginError(message) {
 
 async function applyAvatar(element, seed) {
   if (!element) return
-  // 优先级：上传的皮肤 > 在线头像（Microsoft / Yggdrasil）> 默认皮肤裁出的头部
+  // 优先级：上传的皮肤 > 在线皮肤（Microsoft / Yggdrasil）> 内置默认皮肤
+  //
+  // 注意：skinDataUrl / onlineFace 拿到的是**整张 64×64 皮肤图**，
+  // 直接当头像背景会显示成"皮肤展开图"。所有来源都要先裁出 8×8 头部。
   const key = String(seed || 'voxel-guest')
 
-  const direct = state.skinDataUrl || state.onlineFace
-  if (direct) {
-    element.style.backgroundImage = `url("${direct}")`
+  if (state.skinDataUrl || state.onlineFace) {
+    const faceKey = `face:${state.onlineFace || state.skinDataUrl}`
+    if (avatarCache.has(faceKey)) {
+      element.style.backgroundImage = `url("${avatarCache.get(faceKey)}")`
+      return
+    }
+    element.style.backgroundImage = 'none'
+    const url = state.onlineFace || state.skinDataUrl
+    const face = await headFromSkinUrl(url)
+    avatarCache.set(faceKey, face)
+    if (element.isConnected) element.style.backgroundImage = `url("${face}")`
     return
   }
 
@@ -3414,6 +3425,45 @@ async function applyAvatar(element, seed) {
   const dataUrl = await createAvatarDataUrl(key)
   avatarCache.set(key, dataUrl)
   if (element.isConnected) element.style.backgroundImage = `url("${dataUrl}")`
+}
+
+/**
+ * 从一张皮肤图（data URL 或 URL）里裁出头部。
+ *
+ * 在线账户拿回来的是整张皮肤，直接铺满头像会变成展开图——必须取 (8,8) 的 8×8 区域。
+ * Crafatar 的 ?overlay 接口本身已经是头像，尺寸、内容都还需要再裁一次才统一。
+ */
+async function headFromSkinUrl(url) {
+  const img = await new Promise((resolve) => {
+    const el = new Image()
+    el.onload = () => resolve(el)
+    el.onerror = () => resolve(null)
+    el.src = url
+  })
+  const canvas = document.createElement('canvas')
+  canvas.width = 64
+  canvas.height = 64
+  const ctx = canvas.getContext('2d')
+  ctx.imageSmoothingEnabled = false
+
+  if (!img) {
+    ctx.fillStyle = '#3a3d3a'
+    ctx.fillRect(0, 0, 64, 64)
+    return canvas.toDataURL('image/png')
+  }
+
+  // 已经是 8×8 或更小的图（如 Crafatar 小尺寸头像）：直接等比放大
+  if (img.width <= 8 || img.height <= 8) {
+    ctx.drawImage(img, 0, 0, img.width, img.height, 0, 0, 64, 64)
+    return canvas.toDataURL('image/png')
+  }
+
+  // 标准皮肤：头在 (8,8)；64×64 的还有 (40,8) 的头盔层
+  ctx.drawImage(img, 8, 8, 8, 8, 0, 0, 64, 64)
+  if (img.width >= 64 && img.height >= 32) {
+    ctx.drawImage(img, 40, 8, 8, 8, 0, 0, 64, 64)
+  }
+  return canvas.toDataURL('image/png')
 }
 
 /**
