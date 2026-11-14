@@ -27,6 +27,7 @@
 #include "core/fs.h"
 #include "core/installer.h"
 #include "core/loader.h"
+#include "core/mods.h"
 #include "core/util.h"
 #include "core/versions.h"
 #include "launch/launch.h"
@@ -348,6 +349,59 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
             const nlohmann::json current = Snapshot();
             reply.Ok(voxel::loader::InstallLoader(current, voxel::ResolveGameDir(current),
                                                   mcVersion, loader, loaderVersion));
+        } catch (const std::exception& error) {
+            reply.Fail(error.what());
+        }
+    });
+
+    // ---- Modrinth 内容：模组 / 资源包 / 光影包 ----
+    bridge->RegisterAsync("mods_search", [&](const nlohmann::json& args, Reply reply) {
+        const nlohmann::json payload =
+            args.contains("payload") ? args["payload"] : nlohmann::json::object();
+        try {
+            reply.Ok(voxel::mods::Search(Snapshot(), payload));
+        } catch (const std::exception& error) {
+            reply.Fail(error.what());
+        }
+    });
+
+    bridge->RegisterAsync("mods_versions", [&](const nlohmann::json& args, Reply reply) {
+        const nlohmann::json payload =
+            args.contains("payload") ? args["payload"] : nlohmann::json::object();
+        try {
+            reply.Ok(voxel::mods::Versions(Snapshot(), payload));
+        } catch (const std::exception& error) {
+            reply.Fail(error.what());
+        }
+    });
+
+    bridge->RegisterAsync("mods_install", [&](const nlohmann::json& args, Reply reply) {
+        const nlohmann::json payload =
+            args.contains("payload") ? args["payload"] : nlohmann::json::object();
+        try {
+            const nlohmann::json current = Snapshot();
+            reply.Ok(voxel::mods::Install(current, voxel::ResolveGameDir(current), payload));
+        } catch (const std::exception& error) {
+            reply.Fail(error.what());
+        }
+    });
+
+    bridge->RegisterAsync("mods_installed", [&](const nlohmann::json& args, Reply reply) {
+        const std::string target = args.value("versionId", std::string());
+        const bool isolated = !target.empty();
+        try {
+            const nlohmann::json current = Snapshot();
+            reply.Ok(voxel::mods::Installed(voxel::ResolveGameDir(current), target, isolated));
+        } catch (const std::exception& error) {
+            reply.Fail(error.what());
+        }
+    });
+
+    bridge->RegisterAsync("mods_icon", [&](const nlohmann::json& args, Reply reply) {
+        const nlohmann::json payload =
+            args.contains("payload") ? args["payload"] : nlohmann::json::object();
+        try {
+            reply.Ok(voxel::mods::Icon(Snapshot(), payload));
         } catch (const std::exception& error) {
             reply.Fail(error.what());
         }

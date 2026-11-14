@@ -2,8 +2,8 @@ const api = window.voxel
 
 const PAGE_TITLES = {
   home: '游戏大厅',
-  versions: '版本库',
-  mods: '模组工坊',
+  versions: '下载',
+  mods: '内容下载',
   settings: '设置',
   logs: '运行日志'
 }
@@ -91,6 +91,13 @@ const state = {
     page: 1,
     installed: [],
     installedLoading: false,
+    // mod | resourcepack | shader
+    projectType: 'mod',
+    // 用户自选的筛选版本与加载器；空表示跟随当前使用版本
+    gameVersion: '',
+    loader: '',
+    // 目标实例 id；空 = 当前使用版本
+    installTarget: '',
     // projectId -> data URL ('' when the project has no icon)
     icons: new Map()
   }
@@ -212,7 +219,9 @@ function cacheDom() {
     'yggdrasilLoginButton', 'loginError',
     'launchHud', 'hudKicker', 'hudTitle', 'hudPhases', 'hudBar', 'hudPercent',
     'hudDetail', 'hudSpeed', 'hudCollapse', 'hudRetry', 'hudLogs', 'hudHide', 'hudCancel',
-    'hudPill', 'hudPillText', 'hudPillPercent', 'toastStack'
+    'hudPill', 'hudPillText', 'hudPillPercent', 'toastStack',
+    'installedList', 'installedSummary', 'installedRefresh',
+    'contentGameVersion', 'contentLoader', 'contentInstallTarget'
   ]
 
   for (const id of ids) dom[id] = document.getElementById(id)
@@ -284,6 +293,37 @@ function bindHome() {
   dom.hudCancel.addEventListener('click', handleCancelLaunch)
   // 首页顶部的同步条已移除，这里保持可选，避免元素不存在时抛错
   if (dom.homeRefresh) dom.homeRefresh.addEventListener('click', () => loadVersions(true))
+
+  // 下载页三视图
+  document.querySelectorAll('[data-download-tab]').forEach((button) => {
+    button.addEventListener('click', () => switchDownloadTab(button.dataset.downloadTab))
+  })
+  if (dom.installedRefresh) dom.installedRefresh.addEventListener('click', () => renderInstalledVersions())
+
+  // 内容类型（模组 / 资源包 / 光影包）
+  document.querySelectorAll('[data-content-type]').forEach((button) => {
+    button.addEventListener('click', () => setContentType(button.dataset.contentType))
+  })
+  if (dom.contentGameVersion) {
+    dom.contentGameVersion.addEventListener('change', () => {
+      state.mods.gameVersion = dom.contentGameVersion.value
+      state.mods.loadedKey = ''
+      if (typeof loadModsPage === 'function') loadModsPage()
+    })
+  }
+  if (dom.contentLoader) {
+    dom.contentLoader.addEventListener('change', () => {
+      state.mods.loader = dom.contentLoader.value
+      state.mods.loadedKey = ''
+      if (typeof loadModsPage === 'function') loadModsPage()
+    })
+  }
+  if (dom.contentInstallTarget) {
+    dom.contentInstallTarget.addEventListener('change', () => {
+      state.mods.installTarget = dom.contentInstallTarget.value
+      if (typeof updateModsTargetUI === 'function') updateModsTargetUI(getModTarget())
+    })
+  }
   dom.versionsRefresh.addEventListener('click', () => loadVersions(true))
   dom.openGameFolder.addEventListener('click', () => openPath('game'))
   dom.openVersionsFolder.addEventListener('click', () => openPath('versions'))
@@ -834,6 +874,223 @@ function showBootError(error) {
 /* Navigation                                                                  */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * 下载页的三视图切换：download（游戏版本）/ installed（本机已装）/ content（模组、资源包、光影包）。
+ * 原来模组工坊是独立一级导航，现在并进下载页；保留 data-page="mods" 的旧入口以防外部链接失效。
+ */
+function switchDownloadTab(tab, options = {}) {
+  const target = ['download', 'installed', 'content'].includes(tab) ? tab : 'download'
+  state.downloadTab = target
+
+  document.querySelectorAll('[data-download-tab]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.downloadTab === target)
+  })
+  document.querySelectorAll('[data-download-pane]').forEach((pane) => {
+    pane.classList.toggle('active', pane.dataset.downloadPane === target)
+  })
+
+  if (options.silent) return
+  if (target === 'installed') renderInstalledVersions()
+  if (target === 'content') {
+    // 实际函数名是 loadModsPage；之前这里写成 renderModsPage，
+    // typeof 判空让调用被静默跳过，表现为内容页永远空白。
+    if (typeof loadModsPage === 'function') loadModsPage().catch(() => {})
+  }
+}
+
+/**
+ * 内容类型切换：模组 / 资源包 / 光影包。
+ * 三者共用 Modrinth 搜索，只是 project_type 不同；光影包和资源包与加载器无关，
+ * 所以切到这两类时把加载器过滤重置为"不限"。
+ */
+function setContentType(type) {
+  const target = ['mod', 'resourcepack', 'shader'].includes(type) ? type : 'mod'
+  state.mods.projectType = target
+  state.mods.loadedKey = ''
+  state.mods.results = []
+  state.mods.page = 1
+
+  document.querySelectorAll('[data-content-type]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.contentType === target)
+  })
+
+  if (dom.contentLoader) {
+    // 资源包/光影包不吃加载器过滤
+    dom.contentLoader.disabled = target !== 'mod'
+    if (target !== 'mod') {
+      dom.contentLoader.value = 'vanilla'
+      state.mods.loader = 'vanilla'
+    }
+  }
+  if (dom.modSearchInput) {
+    dom.modSearchInput.placeholder =
+      target === 'resourcepack' ? '搜索 Modrinth 资源包…'
+      : target === 'shader' ? '搜索 Modrinth 光影包…'
+      : '搜索 Modrinth 模组…'
+  }
+  if (dom.modsHeading) {
+    dom.modsHeading.textContent =
+      target === 'resourcepack' ? '资源包下载' : target === 'shader' ? '光影包下载' : '模组下载'
+  }
+  if (typeof loadModsPage === 'function') loadModsPage()
+}
+
+/** 用已安装版本填充"游戏版本 / 安装到实例"两个下拉框。 */
+function populateContentTargets() {
+  const installed = state.versions.filter((item) => item.installed || item.local)
+  const activeId = getActiveVersion()
+
+  // 版本清单还没回来时不要清空下拉框，否则会闪一下"无已安装版本"
+  if (!installed.length && state.versions.length === 0) return
+
+  if (dom.contentGameVersion) {
+    const frag = document.createDocumentFragment()
+    const seen = new Set()
+    for (const item of installed) {
+      // 加载器派生实例的项目里，游戏版本取前缀（1.21.1-fabric-x → 1.21.1）
+      const match = /^(.+?)-(fabric|forge|neoforge)-(.+)$/.exec(item.id)
+      const base = match ? match[1] : item.id
+      if (seen.has(base)) continue
+      seen.add(base)
+      const option = document.createElement('option')
+      option.value = base
+      option.textContent = base
+      frag.append(option)
+    }
+    if (!frag.childNodes.length) {
+      const option = document.createElement('option')
+      option.value = ''
+      option.textContent = '（本机无已安装版本）'
+      frag.append(option)
+    }
+    dom.contentGameVersion.replaceChildren(frag)
+
+    // 保持用户已选；否则默认跟随当前使用版本
+    const current = state.mods.gameVersion
+    const exists = current && Array.from(dom.contentGameVersion.options).some((o) => o.value === current)
+    if (!exists) {
+      const active = state.versions.find((item) => item.id === activeId)
+      const activeBase = active
+        ? (/^(.+?)-(fabric|forge|neoforge)-(.+)$/.exec(active.id)?.[1] || active.id)
+        : ''
+      const pick = Array.from(dom.contentGameVersion.options).find((o) => o.value === activeBase)
+      state.mods.gameVersion = pick ? pick.value : (dom.contentGameVersion.options[0]?.value || '')
+    }
+    dom.contentGameVersion.value = state.mods.gameVersion
+  }
+
+  if (dom.contentInstallTarget) {
+    const frag = document.createDocumentFragment()
+    const auto = document.createElement('option')
+    auto.value = ''
+    auto.textContent = '当前使用版本'
+    frag.append(auto)
+    for (const item of installed) {
+      const option = document.createElement('option')
+      option.value = item.id
+      option.textContent = item.id
+      frag.append(option)
+    }
+    dom.contentInstallTarget.replaceChildren(frag)
+    dom.contentInstallTarget.value = state.mods.installTarget || ''
+  }
+
+  if (dom.contentLoader) {
+    dom.contentLoader.value = state.mods.loader || state.settings?.loader || 'vanilla'
+    state.mods.loader = dom.contentLoader.value
+    dom.contentLoader.disabled = (state.mods.projectType || 'mod') !== 'mod'
+  }
+}
+
+/** 已安装视图：只列本机 versions/ 下的版本（含 Fabric 等加载器实例）。 */async function renderInstalledVersions() {
+  if (!dom.installedList) return
+  dom.installedSummary.textContent = '正在扫描…'
+  dom.installedList.replaceChildren()
+
+  let list = []
+  try {
+    const payload = await invoke(api.getVersions(false))
+    list = state.versions.filter((item) => item.installed || item.local)
+  } catch (error) {
+    dom.installedSummary.textContent = `扫描失败：${error.message}`
+    return
+  }
+
+  if (!list.length) {
+    dom.installedSummary.textContent = '本机还没有安装任何游戏版本'
+    const empty = document.createElement('div')
+    empty.className = 'installed-empty'
+    empty.textContent = '去「下载」标签页安装一个版本吧。'
+    dom.installedList.replaceChildren(empty)
+    return
+  }
+
+  dom.installedSummary.textContent = `共 ${list.length} 个已安装版本`
+  const fragment = document.createDocumentFragment()
+  for (const item of list) {
+    const row = document.createElement('article')
+    row.className = 'installed-row'
+
+    const main = document.createElement('div')
+    main.className = 'installed-main'
+    const title = document.createElement('strong')
+    title.textContent = item.id
+    const meta = document.createElement('span')
+    // 形如 1.21.1-fabric-0.20.1 的是加载器派生实例
+    const match = /^(.+?)-(fabric|forge|neoforge)-(.+)$/.exec(item.id)
+    meta.textContent = match
+      ? `基于 ${match[1]} · ${match[2]} ${match[3]}`
+      : `原版${item.releaseTime ? ' · ' + item.releaseTime.slice(0, 10) : ''}`
+    main.append(title, meta)
+
+    const actions = document.createElement('div')
+    actions.className = 'installed-actions'
+
+    const useBtn = document.createElement('button')
+    useBtn.className = 'ghost-btn small'
+    useBtn.textContent = item.id === getActiveVersion() ? '当前使用' : '使用'
+    useBtn.disabled = item.id === getActiveVersion()
+    useBtn.addEventListener('click', async () => {
+      try {
+        await invoke(api.saveSettings({ version: item.id }))
+        state.settings.version = item.id
+        updateHomeVersion()
+        renderInstalledVersions()
+        toast(`已切换到 ${item.id}`, 'success')
+      } catch (error) {
+        toast(error.message, 'error')
+      }
+    })
+
+    const folderBtn = document.createElement('button')
+    folderBtn.className = 'ghost-btn small'
+    folderBtn.textContent = '打开文件夹'
+    folderBtn.addEventListener('click', () => {
+      invoke(api.openVersionFolder(item.id)).catch((error) => toast(error.message, 'error'))
+    })
+
+    const delBtn = document.createElement('button')
+    delBtn.className = 'ghost-btn small danger'
+    delBtn.textContent = '删除'
+    delBtn.addEventListener('click', async () => {
+      if (!window.confirm(`确定删除版本 ${item.id}？该操作不可撤销。`)) return
+      try {
+        await invoke(api.deleteVersion(item.id))
+        await loadVersions(true)
+        renderInstalledVersions()
+        toast(`已删除 ${item.id}`, 'success')
+      } catch (error) {
+        toast(error.message, 'error')
+      }
+    })
+
+    actions.append(useBtn, folderBtn, delBtn)
+    row.append(main, actions)
+    fragment.append(row)
+  }
+  dom.installedList.replaceChildren(fragment)
+}
+
 function navigate(page) {
   if (!PAGE_TITLES[page]) return
   state.page = page
@@ -845,6 +1102,16 @@ function navigate(page) {
   dom.pages.forEach((panel) => panel.classList.toggle('active', panel.dataset.pagePanel === page))
   dom.navItems.forEach((item) => item.classList.toggle('active', item.dataset.page === page))
   dom.pageTitle.textContent = PAGE_TITLES[page]
+
+  if (page === 'versions') {
+    // 进下载页默认停在上次用的视图；没有就停在「下载」
+    switchDownloadTab(state.downloadTab || 'download', { silent: true })
+  }
+  if (page === 'mods') {
+    navigate('versions')
+    switchDownloadTab('content')
+    return
+  }
 
   if (page === 'logs') {
     dom.logLiveDot.hidden = true
@@ -1274,7 +1541,10 @@ function compareRelease(a, b) {
 
 // The loader metadata lookup is advisory only: give up after two seconds instead of waiting for
 // every mirror retry, and cache the fallback so re-selecting the version is instant.
-const LOADER_LOOKUP_TIMEOUT = 2000
+// 加载器元数据查询：现在后端会真的去查 Fabric/Forge 的版本列表，
+// 2 秒在慢网下必然超时（表现为"加载器信息获取失败"）。给到 8 秒，
+// 仍远小于用户会觉得卡住的阈值，超时后照旧退回纯原版。
+const LOADER_LOOKUP_TIMEOUT = 8000
 
 function getLoaderOptions(mcVersion, support) {
   if (state.loaderCache.has(mcVersion)) return Promise.resolve(state.loaderCache.get(mcVersion))
@@ -1391,7 +1661,9 @@ function renderLoaderOptions(options, errorMessage = '') {
     if (type !== 'vanilla') {
       const action = document.createElement('em')
       action.className = 'loader-install-action'
-      action.textContent = '安装为独立版本'
+      // 原来这里写"安装为独立版本"，但每个加载器本来就是按实例装的，
+      // 这句话对用户没有信息量，还会把卡片撑破；改成直接说"点击安装"。
+      action.textContent = option.available === false ? '暂不可用' : '点击安装'
       copy.append(action)
     }
 
@@ -1536,21 +1808,43 @@ const MOD_LOADERS = new Set(['fabric', 'quilt', 'forge', 'neoforge'])
 
 function getModTarget() {
   const activeId = getActiveVersion()
-  const active = state.versions.find((item) => item.id === activeId)
-  const version = active?.local ? active.baseVersion || '' : activeId
-  const loader = state.settings?.loader || 'vanilla'
+  // 本地实例（含加载器派生版本）的"游戏版本"取 id 前缀：
+  // 1.21.1-fabric-0.20.1 → 1.21.1；原版实例 id 就是游戏版本本身。
+  // 之前依赖 baseVersion 字段，但本地扫描出来的条目不一定带这个字段，
+  // 会导致这里取到空串、整页判定"没有模组加载器"。
+  const baseOf = (id) => {
+    if (!id) return ''
+    const m = /^(.+?)-(fabric|forge|neoforge)-(.+)$/.exec(id)
+    return m ? m[1] : id
+  }
+  const activeBase = baseOf(activeId)
+
+  // 用户可以在下载页手动指定筛选版本与加载器，不再强制跟随主界面当前版本。
+  const version = state.mods.gameVersion || activeBase
+  const loader = state.mods.loader || state.settings?.loader || 'vanilla'
   return {
     version,
     loader,
-    supported: Boolean(version) && MOD_LOADERS.has(loader),
+    supported: Boolean(version),
     key: `${version || ''}|${loader}`,
-    // Where the next download lands; empty means "ask the user".
+    targetVersionId: state.mods.installTarget || '',
+    projectType: state.mods.projectType || 'mod',
     saveDir: state.modSaveDir || ''
   }
 }
 
 async function loadModsPage() {
   if (!state.settings) return
+  // 版本清单可能还没拉完（刚启动就切到内容页），这里主动补一次，
+  // 否则下拉框会是空的、整页误判成"没有模组加载器"。
+  if (!state.versions.length) {
+    try {
+      await loadVersions(false)
+    } catch {
+      /* 拉不到就按空处理，下面会显示对应提示 */
+    }
+  }
+  populateContentTargets()
   const target = getModTarget()
   updateModsTargetUI(target)
   await loadInstalledMods(true)
@@ -1651,7 +1945,8 @@ async function searchMods(query) {
       api.searchMods({
         query: normalizedQuery,
         gameVersion: target.version,
-        loader: target.loader
+        loader: target.loader,
+        projectType: target.projectType || 'mod'
       })
     )
     if (requestSeq !== state.mods.requestSeq || getModTarget().key !== target.key) return
@@ -1993,16 +2288,8 @@ function setModIcon(mark, dataUrl) {
 async function installMod(mod, button, target, chosenVersionId = '') {
   if (state.mods.installing.has(mod.projectId)) return
 
-  // Ask where the file should be saved before downloading. The picker opens at the game directory
-  // (or the folder chosen earlier) and the choice is remembered, so repeat installs stay quick.
-  if (!state.modSaveDir) {
-    const saveDir = await chooseModDir(state.appInfo?.gameDir || '')
-    if (!saveDir) {
-      // The user cancelled: keep the card untouched so they can try again later.
-      return
-    }
-  }
-
+  // 以前每次都会弹目录选择框；现在目标实例由下拉框决定，
+  // 只有用户显式点过"自定义目录"（state.modSaveDir 非空）时才沿用那个目录。
   state.mods.installing.add(mod.projectId)
   button.disabled = true
   button.textContent = '下载中…'
@@ -2011,16 +2298,18 @@ async function installMod(mod, button, target, chosenVersionId = '') {
     const result = await invoke(
       api.installMod({
         projectId: mod.projectId,
+        projectType: target.projectType || 'mod',
+        versionId: chosenVersionId,
+        targetVersionId: target.targetVersionId || '',
         gameVersion: target.version,
         loader: target.loader,
-        chosenVersionId,
-        targetDir: state.modSaveDir
+        targetDir: state.modSaveDir || ''
       })
     )
     toast(
       result.alreadyInstalled
-        ? `${result.filename} 已存在于 ${result.directory || '目标文件夹'}，无需重复下载。`
-        : `已下载 ${result.filename} 到 ${result.directory || '目标文件夹'}。`,
+        ? `${result.fileName} 已存在，无需重复下载。`
+        : `已下载 ${result.fileName} → ${result.targetVersionId || '游戏根目录'}`,
       'success'
     )
     appendLog('INFO', `已安装模组 ${result.filename}（${mod.title}）到 ${result.directory || ''}。`)

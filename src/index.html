@@ -168,12 +168,7 @@
           </button>
           <button class="nav-item" data-page="versions">
             <svg><use href="#i-layers"></use></svg>
-            <span>版本库</span>
-            <i class="nav-active-bar"></i>
-          </button>
-          <button class="nav-item" data-page="mods">
-            <svg><use href="#i-package"></use></svg>
-            <span>模组工坊</span>
+            <span>下载</span>
             <i class="nav-active-bar"></i>
           </button>
           <button class="nav-item" data-page="settings">
@@ -352,8 +347,8 @@
         <section class="page" data-page-panel="versions" aria-labelledby="versionsHeading">
           <header class="page-head compact">
             <div>
-              <p class="eyebrow"><span class="eyebrow-line"></span>VERSION LIBRARY</p>
-              <h1 id="versionsHeading">版本库</h1>
+              <p class="eyebrow"><span class="eyebrow-line"></span>DOWNLOAD CENTER</p>
+              <h1 id="versionsHeading">下载</h1>
             </div>
             <div class="head-actions">
               <button id="versionsRefresh" class="ghost-btn">
@@ -362,6 +357,15 @@
               </button>
             </div>
           </header>
+
+          <!-- 下载 / 已安装 / 内容 三个视图 -->
+          <div class="download-tabs" role="tablist" aria-label="下载分类">
+            <button class="download-tab active" data-download-tab="download" role="tab">下载</button>
+            <button class="download-tab" data-download-tab="installed" role="tab">已安装</button>
+            <button class="download-tab" data-download-tab="content" role="tab">内容</button>
+          </div>
+
+          <div class="download-pane active" data-download-pane="download">
 
           <div class="versions-layout">
             <section class="version-browser panel">
@@ -429,13 +433,32 @@
               <button id="openVersionsFolder" class="ghost-btn full">打开版本目录</button>
             </aside>
           </div>
-        </section>
+          </div><!-- /download-pane: download -->
 
-        <section class="page" data-page-panel="mods" aria-labelledby="modsHeading">
+          <!-- 已安装：只列本机已有的游戏版本（含各加载器实例） -->
+          <div class="download-pane" data-download-pane="installed">
+            <div class="installed-head">
+              <div>
+                <h2 class="installed-title">本机已安装版本</h2>
+                <p id="installedSummary" class="installed-summary">正在扫描…</p>
+              </div>
+              <button id="installedRefresh" class="ghost-btn">
+                <svg><use href="#i-refresh"></use></svg>
+                重新扫描
+              </button>
+            </div>
+            <div id="installedList" class="installed-list">
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+            </div>
+          </div>
+
+          <!-- 内容下载：模组 / 资源包 / 光影包 -->
+          <div class="download-pane" data-download-pane="content">
           <header class="page-head compact">
             <div>
-              <p class="eyebrow"><span class="eyebrow-line"></span>MODRINTH / COMPATIBLE FILES</p>
-              <h1 id="modsHeading">模组工坊</h1>
+              <p class="eyebrow"><span class="eyebrow-line"></span>MODRINTH / CONTENT</p>
+              <h1 id="modsHeading">内容下载</h1>
             </div>
             <div class="head-actions">
               <button id="modsRefresh" class="ghost-btn">
@@ -451,6 +474,34 @@
 
           <div class="mods-layout">
             <section class="mod-browser panel">
+              <!-- 内容类型：三类共用 Modrinth，只是 project_type 不同 -->
+              <div class="content-type-tabs" role="tablist" aria-label="内容类型">
+                <button class="content-type-tab active" data-content-type="mod" role="tab">模组</button>
+                <button class="content-type-tab" data-content-type="resourcepack" role="tab">资源包</button>
+                <button class="content-type-tab" data-content-type="shader" role="tab">光影包</button>
+              </div>
+
+              <!-- 用户自选筛选条件与安装目标，不再强制跟随当前版本 -->
+              <div class="content-targets">
+                <label class="content-field">
+                  <span>游戏版本</span>
+                  <select id="contentGameVersion"></select>
+                </label>
+                <label class="content-field">
+                  <span>加载器</span>
+                  <select id="contentLoader">
+                    <option value="vanilla">不限 / 原版</option>
+                    <option value="fabric">Fabric</option>
+                    <option value="forge">Forge</option>
+                    <option value="neoforge">NeoForge</option>
+                  </select>
+                </label>
+                <label class="content-field">
+                  <span>安装到实例</span>
+                  <select id="contentInstallTarget"></select>
+                </label>
+              </div>
+
               <div class="mod-toolbar">
                 <label class="mod-search-field">
                   <svg><use href="#i-search"></use></svg>
@@ -469,7 +520,7 @@
                   <strong id="modsCompatTitle">检查安装目标</strong>
                   <p id="modsCompatText">正在读取当前实例的版本和加载器。</p>
                 </div>
-                <button class="ghost-btn small" data-page="versions">版本库</button>
+                <button class="ghost-btn small" data-download-tab="download">去下载版本</button>
               </div>
 
               <div class="mod-results-head">
@@ -505,7 +556,7 @@
                 <code id="modsFolderPath">—</code>
                 <button id="chooseModDir" type="button" class="ghost-btn small" title="下载模组时打开文件夹选择框">选择…</button>
               </div>
-              <p id="modsDirHint" class="field-hint">下载每个模组时都会弹出文件夹选择框，默认从游戏目录开始。</p>
+              <p id="modsDirHint" class="field-hint">文件按内容类型落到所选实例的 mods / resourcepacks / shaderpacks 目录；上方「安装到实例」决定具体位置。</p>
               <div class="mod-side-actions">
                 <button class="ghost-btn small" data-page="versions">更换版本</button>
                 <button class="ghost-btn small" data-open-path="mods">打开文件夹</button>
@@ -523,6 +574,8 @@
               </div>
               <p class="mods-note">模组下载到当前版本实例的 <code>mods</code> 目录，每个版本实例（如 <code>1.21.1-fabric-0.16.9</code>）完全独立、互不影响。安装前请确认版本和加载器匹配；前置文件需要自行安装。</p>
             </aside>
+          </div>
+        
           </div>
         </section>
 

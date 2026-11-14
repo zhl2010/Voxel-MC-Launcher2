@@ -2152,7 +2152,10 @@ svg {
 
 .loader-options {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0, 1fr) 而不是 1fr：1fr 的最小尺寸是内容宽度，
+     而卡片里的说明文字是 nowrap，"安装为独立版本"这类文案会把格子撑破，
+     表现为第二列溢出、和相邻卡片重叠——这就是之前的错位。 */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -2160,6 +2163,8 @@ svg {
   display: flex;
   align-items: center;
   gap: 7px;
+  min-width: 0;      /* 允许子项收缩，否则 nowrap 文案顶宽整行 */
+  overflow: hidden;
   min-height: 43px;
   padding: 7px 8px;
   color: var(--text-soft);
@@ -2208,13 +2213,18 @@ svg {
 .loader-option-copy {
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  min-width: 0;      /* 配合父级的 min-width:0，让 ellipsis 真正生效 */
+  flex: 1 1 auto;
   gap: 1px;
+  overflow: hidden;
 }
 
 .loader-option-copy strong {
   font-size: 0.5938rem;
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .loader-option-copy small {
@@ -9036,4 +9046,184 @@ html[data-theme="light"] .directory-row .text-btn:hover {
   margin: 6px 0 0;
   font-size: 0.5625rem;
   line-height: 1.5;
+}
+
+/* ===== 下载页三视图（下载 / 已安装 / 内容） ===== */
+
+.download-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.download-tab {
+  padding: 8px 18px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted, #9da19c);
+  font: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.download-tab:hover {
+  border-color: var(--line-strong);
+  color: var(--accent);
+}
+
+.download-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.download-pane {
+  display: none;
+}
+
+.download-pane.active {
+  display: block;
+}
+
+.installed-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.installed-title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  letter-spacing: 0.02em;
+}
+
+.installed-summary {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted, #9da19c);
+}
+
+.installed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.installed-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.installed-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.installed-main strong {
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.installed-main span {
+  font-size: 12px;
+  color: var(--muted, #9da19c);
+}
+
+.installed-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.installed-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--muted, #9da19c);
+  border: 1px dashed var(--line);
+  font-size: 13px;
+}
+
+/* ===== 内容下载：类型切换与目标选择 ===== */
+
+.content-type-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.content-type-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted, #9da19c);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.content-type-tab:hover {
+  border-color: var(--line-strong);
+  color: var(--accent);
+}
+
+.content-type-tab.active {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.content-targets {
+  display: grid;
+  /* 三列等宽且可收缩，避免下拉框内容把布局撑坏 */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.content-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.content-field span {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--muted-2, #6f736f);
+  text-transform: uppercase;
+}
+
+.content-field select {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-soft, var(--accent));
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+.content-field select:hover {
+  border-color: var(--line-strong);
 }
