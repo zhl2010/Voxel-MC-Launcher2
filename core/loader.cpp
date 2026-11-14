@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -175,30 +176,34 @@ nlohmann::json InstallFabric(const nlohmann::json& settings, const std::wstring&
 
 }  // namespace
 
-namespace {
-
-// Forge：从官方 installer jar 里取出 version.json 作为版本元数据。
+// Forge / NeoForge：从官方 installer jar 里取出 version.json 作为版本元数据。
 //
 // 这条路避开了"跑 processor"的重活——installer 里的 version.json 已经是
-// 完整的版本描述（mainClass、49 个 libraries、arguments），
-// inheritsFrom 指回原版，和 Fabric 一样可以直接落地成一个可启动的实例。
+// 完整的版本描述（mainClass、libraries、arguments），inheritsFrom 指回原版，
+// 和 Fabric 一样可以直接落地成一个可启动的实例。
 //
-// processor 的实际作用是把原版 jar 反混淆成 srg 名字，只有需要演进到
-// "真正脱壳的历史版本"时才必须；1.17+ 的 Forge 由 bootstrap 运行时自己处理。
-nlohmann::json InstallForge(const nlohmann::json& settings, const std::wstring& gameDir,
-                            const std::string& mc, std::string loaderVersion) {
-    // 1) 确定版本号：没指定就取该 Minecraft 版本对应的最新 Forge
+// processor 只负责把原版 jar 反混淆成 srg 名字，1.17+ 的 Forge/NeoForge
+// 由各自的 bootstrap 在启动时处理，所以元数据落地即可用。
+struct NeoLikeSource {
+    std::string loader;        // forge / neoforge
+    std::wstring metaUrl;      // maven-metadata.xml（走 BMCL 镜像）
+    std::wstring artifactBase; // installer jar 所在目录前缀
+    std::string versionPrefix; // 版本号前缀，如 "1.21.1-" 或 "21.1."
+};
+
+nlohmann::json InstallNeoLike(const nlohmann::json& settings, const std::wstring& gameDir,
+                              const std::string& mc, const NeoLikeSource& source,
+                              std::string loaderVersion) {
+    const bool isNeo = source.loader == "neoforge";
+
+    // 1) 确定版本号：没指定就取该 Minecraft 版本对应的最新构建
     if (loaderVersion.empty()) {
-        const std::wstring metaUrl =
-            L"https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml";
         std::string body;
         std::wstring error;
-        if (!net::GetText(metaUrl, settings, body, &error)) {
-            throw std::runtime_error("无法获取 Forge 版本列表" +
+        if (!net::GetText(source.metaUrl, settings, body, &error)) {
+            throw std::runtime_error("无法获取 " + source.loader + " 版本列表" +
                                      (error.empty() ? "" : "：" + WideToUtf8(error)));
         }
-        // maven-metadata.xml 形如 <version>1.21.1-52.1.0</version>
-        const std::string prefix = mc + "-";
         std::string best;
         size_t pos = 0;
         while ((pos = body.find("<version>", pos)) != std::string::npos) {
@@ -206,70 +211,97 @@ nlohmann::json InstallForge(const nlohmann::json& settings, const std::wstring& 
             if (end == std::string::npos) break;
             const std::string v = body.substr(pos + 9, end - pos - 9);
             pos = end + 1;
-            if (v.rfind(prefix, 0) != 0) continue;
-            // 同前缀里取版本号最大的（按 - 后的数字比较）
-            const std::string tail = v.substr(prefix.size());
-            const std::string bestTail =
-                best.empty() ? std::string() : best.substr(prefix.size());
-            if (best.empty() || CompareDotted(tail, bestTail) > 0) best = v;
+            if (v.rfind(source.versionPrefix, 0) != 0) continue;
+            const std::string tail = v.substr(source.versionPrefix.size());
+            if (best.empty() || CompareDotted(tail, best) > 0) best = tail;
         }
         if (best.empty()) {
-            throw std::runtime_error("Forge 没有支持 Minecraft " + mc + " 的版本");
+            throw std::runtime_error(source.loader + " 没有支持 Minecraft " + mc + " 的版本");
         }
-        loaderVersion = best.substr(prefix.size());
+        loaderVersion = best;
     }
 
-    // 2) 下载 installer（BMCL 镜像优先，镜像规则已在 net::GetText 里配好）
-    const std::string full = mc + "-" + loaderVersion;
-    const std::wstring jarUrl = Utf8ToWide(
-        "https://maven.minecraftforge.net/net/minecraftforge/forge/" + full + "/forge-" + full +
-        "-installer.jar");
+    // 2) 下载 installer 并取出 version.json
+    const std::wstring full =
+        Utf8ToWide(isNeo ? loaderVersion : (mc + "-" + loaderVersion));
+    const std::wstring loaderW = Utf8ToWide(source.loader);
+    const std::wstring jarUrl = source.artifactBase + L"/" + full + L"/" + loaderW + L"-" +
+                                full + L"-installer.jar";
 
-    const std::wstring tempDir = fs::UniqueTempPath(L"voxel-forge");
+    const std::wstring tempDir = fs::UniqueTempPath(L"voxel-loader");
     if (!fs::EnsureDir(tempDir)) throw std::runtime_error("无法创建临时目录");
     const std::wstring jarPath = fs::Join(tempDir, L"installer.jar");
 
     std::wstring error;
     if (!net::GetFile(jarUrl, jarPath, settings, &error, [](uint64_t) {}, nullptr)) {
         fs::DeleteTree(tempDir);
-        throw std::runtime_error("Forge 安装包下载失败" +
+        throw std::runtime_error(source.loader + " 安装包下载失败" +
                                  (error.empty() ? "" : "：" + WideToUtf8(error)));
     }
 
-    // 3) 用 bsdtar 取出 version.json（installer 是 zip）
+    // 3) 用 bsdtar 解出 version.json（installer 是 zip）
     int exitCode = 0;
     std::wstring tarError;
     if (!proc::RunCapture(L"tar", {L"-xf", jarPath, L"-C", tempDir, L"version.json"}, tempDir,
                           120000, &exitCode, &tarError)) {
         fs::DeleteTree(tempDir);
-        throw std::runtime_error("无法解包 Forge 安装器" +
+        throw std::runtime_error("无法解包 " + source.loader + " 安装器" +
                                  (tarError.empty() ? "" : "：" + WideToUtf8(tarError)));
     }
 
-    const std::wstring versionJsonPath = fs::Join(tempDir, L"version.json");
-    const std::string raw = fs::ReadText(versionJsonPath);
+    const std::string raw = fs::ReadText(fs::Join(tempDir, L"version.json"));
     fs::DeleteTree(tempDir);
-    if (raw.empty()) throw std::runtime_error("Forge 安装器里没有 version.json");
+    if (raw.empty()) {
+        throw std::runtime_error(source.loader + " 安装器里没有 version.json");
+    }
 
     nlohmann::json profile = nlohmann::json::parse(raw, nullptr, false);
     if (profile.is_discarded() || !profile.is_object()) {
-        throw std::runtime_error("Forge 的 version.json 格式异常");
+        throw std::runtime_error(source.loader + " 的 version.json 格式异常");
     }
 
     // 4) 落地成独立实例
-    const std::string id = InstanceIdFor(mc, "forge", loaderVersion);
+    const std::string id = InstanceIdFor(mc, source.loader, loaderVersion);
     const int libraries = profile.contains("libraries") && profile["libraries"].is_array()
                               ? static_cast<int>(profile["libraries"].size())
                               : 0;
     WriteInstance(gameDir, id, RewriteProfile(profile, id, mc));
 
     return nlohmann::json{{"id", id},
-                          {"loader", "forge"},
+                          {"loader", source.loader},
                           {"loaderVersion", loaderVersion},
                           {"librariesDownloaded", libraries}};
 }
 
-}  // namespace
+// Forge：版本号带 Minecraft 前缀（1.21.1-52.1.0）
+NeoLikeSource ForgeSource() {
+    return NeoLikeSource{
+        "forge",
+        L"https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/maven-metadata.xml",
+        L"https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge",
+        ""};
+}
+
+// NeoForge：版本号是 21.1.x 形式，maven 路径不带 /releases 前缀。
+// 官方 maven.neoforged.net 在本机被阻断（TCP 443 超时），只有 BMCL 镜像可达。
+NeoLikeSource NeoForgeSource() {
+    return NeoLikeSource{
+        "neoforge",
+        L"https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/maven-metadata.xml",
+        L"https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge",
+        ""};
+}
+
+// NeoForge 的版本号前两位由 Minecraft 版本推出：1.21.1 → 21.1.
+std::string NeoForgePrefixFor(const std::string& mc) {
+    // "1.21.1" → major=1, minor=21, patch=1
+    int major = 0, minor = 0, patch = 0;
+    char extra = 0;
+    if (std::sscanf(mc.c_str(), "%d.%d.%d%c", &major, &minor, &patch, &extra) < 2) return "";
+    if (major != 1) return "";
+    // 1.21 → 21.0.，1.21.1 → 21.1.
+    return std::to_string(minor) + "." + std::to_string(patch) + ".";
+}
 
 nlohmann::json ListLoaders(const nlohmann::json& settings, const std::string& mcVersion) {
     nlohmann::json result = nlohmann::json::object();
@@ -307,8 +339,7 @@ nlohmann::json ListLoaders(const nlohmann::json& settings, const std::string& mc
     if (!mcVersion.empty()) {
         std::wstring error;
         std::string body;
-        if (net::GetText(L"https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml",
-                         settings, body, &error)) {
+        if (net::GetText(ForgeSource().metaUrl, settings, body, &error)) {
             const std::string prefix = mcVersion + "-";
             std::string best;
             size_t pos = 0;
@@ -336,11 +367,40 @@ nlohmann::json ListLoaders(const nlohmann::json& settings, const std::string& mc
     }
     result["forge"] = forge.ToJson();
 
-    // NeoForge：maven.neoforged.net 在本环境不可达（官方与 BMCL 镜像均超时），
-    // 如实标记不可用，而不是给一个点了必然失败的按钮。
-    result["neoforge"] =
-        LoaderOption{"neoforge", "NeoForge", "", "NeoForge 源暂不可达，请稍后再试", false}
-            .ToJson();
+    // NeoForge：版本号形如 21.1.266，前两段由 Minecraft 版本推出（1.21.1 → 21.1.）
+    LoaderOption neoforge{"neoforge", "NeoForge", "", "Forge 的社区分支，更新更快", false};
+    const std::string neoPrefix = NeoForgePrefixFor(mcVersion);
+    if (!mcVersion.empty() && !neoPrefix.empty()) {
+        std::wstring error;
+        std::string body;
+        if (net::GetText(NeoForgeSource().metaUrl, settings, body, &error)) {
+            std::string best;
+            size_t pos = 0;
+            while ((pos = body.find("<version>", pos)) != std::string::npos) {
+                const size_t end = body.find("</version>", pos);
+                if (end == std::string::npos) break;
+                const std::string v = body.substr(pos + 9, end - pos - 9);
+                pos = end + 1;
+                if (v.rfind(neoPrefix, 0) != 0) continue;
+                const std::string tail = v.substr(neoPrefix.size());
+                if (best.empty() || CompareDotted(tail, best) > 0) best = tail;
+            }
+            if (!best.empty()) {
+                neoforge.latestVersion = best;
+                neoforge.detail = "最新 " + best;
+                neoforge.available = true;
+            } else {
+                neoforge.detail = "该版本暂无 NeoForge";
+            }
+        } else {
+            neoforge.detail = "无法获取 NeoForge 版本，请检查网络";
+        }
+    } else if (!mcVersion.empty()) {
+        neoforge.detail = "该 Minecraft 版本暂不支持 NeoForge";
+    } else {
+        neoforge.detail = "请先选择 Minecraft 版本";
+    }
+    result["neoforge"] = neoforge.ToJson();
 
     return result;
 }
@@ -377,28 +437,35 @@ nlohmann::json InstallLoader(const nlohmann::json& settings, const std::wstring&
                               {"librariesDownloaded", installed.value("librariesDownloaded", 0)}};
     }
 
-    if (loader == "forge") {
+    if (loader == "forge" || loader == "neoforge") {
+        const bool isNeo = loader == "neoforge";
         if (!loaderVersion.empty()) {
-            const std::string id = InstanceIdFor(mcVersion, "forge", loaderVersion);
+            const std::string id = InstanceIdFor(mcVersion, loader, loaderVersion);
             if (fs::Exists(fs::Join(VersionDir(gameDir, id), Utf8ToWide(id) + L".json"))) {
                 return nlohmann::json{{"id", id},
-                                      {"loader", "forge"},
+                                      {"loader", loader},
                                       {"loaderVersion", loaderVersion},
                                       {"alreadyInstalled", true},
                                       {"librariesDownloaded", 0}};
             }
         }
-        const nlohmann::json installed = InstallForge(settings, gameDir, mcVersion, loaderVersion);
-        return nlohmann::json{
-            {"id", installed.value("id", std::string())},
-            {"loader", "forge"},
-            {"loaderVersion", installed.value("loaderVersion", std::string())},
-            {"alreadyInstalled", false},
-            {"librariesDownloaded", installed.value("librariesDownloaded", 0)}};
-    }
 
-    if (loader == "neoforge") {
-        throw std::runtime_error("NeoForge 的版本源当前不可达，请稍后重试或改用 Forge");
+        NeoLikeSource source = isNeo ? NeoForgeSource() : ForgeSource();
+        if (isNeo) {
+            source.versionPrefix = NeoForgePrefixFor(mcVersion);
+            if (source.versionPrefix.empty()) {
+                throw std::runtime_error("无法从 Minecraft " + mcVersion +
+                                         " 推断 NeoForge 版本号（需要 1.x.y 形式）");
+            }
+        }
+
+        const nlohmann::json installed =
+            InstallNeoLike(settings, gameDir, mcVersion, source, loaderVersion);
+        return nlohmann::json{{"id", installed.value("id", std::string())},
+                              {"loader", loader},
+                              {"loaderVersion", installed.value("loaderVersion", std::string())},
+                              {"alreadyInstalled", false},
+                              {"librariesDownloaded", installed.value("librariesDownloaded", 0)}};
     }
 
     throw std::runtime_error("未知的加载器：" + loader);

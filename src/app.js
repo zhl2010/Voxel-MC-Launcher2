@@ -1925,7 +1925,7 @@ function createModsEmpty(title, detail) {
   return wrap
 }
 
-async function searchMods(query) {
+async function searchMods(query, page = 1) {
   const target = getModTarget()
   if (!target.supported) {
     renderModsNoLoader(target)
@@ -1934,6 +1934,8 @@ async function searchMods(query) {
 
   const requestSeq = ++state.mods.requestSeq
   const normalizedQuery = String(query || '').trim()
+  const pageSize = 20
+  const safePage = Math.max(1, Number(page) || 1)
   state.mods.loading = true
   state.mods.error = ''
   dom.modSearchBtn.disabled = true
@@ -1946,7 +1948,9 @@ async function searchMods(query) {
         query: normalizedQuery,
         gameVersion: target.version,
         loader: target.loader,
-        projectType: target.projectType || 'mod'
+        projectType: target.projectType || 'mod',
+        limit: pageSize,
+        offset: (safePage - 1) * pageSize
       })
     )
     if (requestSeq !== state.mods.requestSeq || getModTarget().key !== target.key) return
@@ -2016,14 +2020,15 @@ function renderModResults(target) {
     return
   }
 
-  const totalPages = Math.max(1, Math.ceil(hits.length / MODS_PER_PAGE))
+  // 后端分页：每次只请求一页，所以这里不再前端切片
+  const totalPages = Math.max(1, Math.ceil((state.mods.total || hits.length) / MODS_PER_PAGE))
   const page = Math.min(Math.max(1, state.mods.page || 1), totalPages)
   state.mods.page = page
+  const slice = hits
   const start = (page - 1) * MODS_PER_PAGE
-  const slice = hits.slice(start, start + MODS_PER_PAGE)
-  const end = Math.min(start + MODS_PER_PAGE, hits.length)
+  const end = start + hits.length
 
-  dom.modsResultMeta.textContent = `显示 ${start + 1}–${end} / ${state.mods.total} 个兼容项目`
+  dom.modsResultMeta.textContent = `第 ${start + 1}–${end} 个 / 共 ${state.mods.total} 个兼容项目`
   const fragment = document.createDocumentFragment()
   for (const mod of slice) {
     const card = document.createElement('article')
@@ -2121,7 +2126,8 @@ function renderModPagination(totalPages, current) {
     if (!disabled && page !== current) {
       button.addEventListener('click', () => {
         state.mods.page = page
-        renderModResults(getModTarget())
+        // 后端分页：翻页要重新请求对应 offset
+        searchMods(state.mods.query, page).catch(() => {})
       })
     }
     return button
@@ -2139,6 +2145,8 @@ function renderModPagination(totalPages, current) {
   }
   fragment.append(makeButton('>', current + 1, current >= totalPages))
   nav.replaceChildren(fragment)
+  // 之前这个容器始终是 hidden，分页按钮根本没显示过
+  nav.hidden = totalPages <= 1
 }
 
 function modPageWindow(current, total) {
