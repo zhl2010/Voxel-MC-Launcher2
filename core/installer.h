@@ -52,6 +52,9 @@ using ProgressFn = std::function<void(const nlohmann::json&)>;
 
 bool SafeVersionId(const std::string& id);
 
+// 系统 bsdtar 的完整路径（用于解压 installer / natives 这类 zip）
+std::wstring TarExe();
+
 // 规则判定（os.name / os.arch / os.version），启动参数与库过滤共用一份实现
 bool RulesAllowJson(const nlohmann::json& rules);
 

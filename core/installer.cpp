@@ -279,15 +279,6 @@ std::wstring NativesDir(const std::wstring& gameDir, const std::string& id) {
     return fs::Join(fs::Join(gameDir, L"bin"), Utf8ToWide(id));
 }
 
-std::wstring TarExe() {
-    wchar_t systemDir[MAX_PATH]{};
-    if (GetSystemDirectoryW(systemDir, MAX_PATH) > 0) {
-        const std::wstring candidate = fs::Join(systemDir, L"tar.exe");
-        if (fs::Exists(candidate)) return candidate;
-    }
-    return L"tar.exe";
-}
-
 bool CopyFlat(const std::wstring& sourceDir, const std::wstring& targetDir) {
     bool ok = true;
     for (const std::wstring& file : fs::ListFiles(sourceDir, true)) {
@@ -304,6 +295,17 @@ bool CopyFlat(const std::wstring& sourceDir, const std::wstring& targetDir) {
 }
 
 }  // namespace
+
+// 系统自带 bsdtar 的完整路径。CreateProcessW 的第一个参数是程序路径，
+// 传 "tar" 不会去 PATH 里找，会直接 ERROR_FILE_NOT_FOUND。
+std::wstring TarExe() {
+    wchar_t systemDir[MAX_PATH]{};
+    if (GetSystemDirectoryW(systemDir, MAX_PATH) > 0) {
+        const std::wstring candidate = fs::Join(systemDir, L"tar.exe");
+        if (fs::Exists(candidate)) return candidate;
+    }
+    return L"tar.exe";
+}
 
 bool SafeVersionId(const std::string& id) {
     if (id.empty() || id == "." || id == "..") return false;

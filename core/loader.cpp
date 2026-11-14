@@ -243,9 +243,11 @@ nlohmann::json InstallNeoLike(const nlohmann::json& settings, const std::wstring
     }
 
     // 3) 用 bsdtar 解出 version.json（installer 是 zip）
+    //    注意必须传 tar.exe 的完整路径：CreateProcessW 的第一个参数是程序路径，
+    //    只写 "tar" 不会去 PATH 里找，会直接返回 ERROR_FILE_NOT_FOUND（错误码 2）。
     int exitCode = 0;
     std::wstring tarError;
-    if (!proc::RunCapture(L"tar", {L"-xf", jarPath, L"-C", tempDir, L"version.json"}, tempDir,
+    if (!proc::RunCapture(TarExe(), {L"-xf", jarPath, L"-C", tempDir, L"version.json"}, tempDir,
                           120000, &exitCode, &tarError)) {
         fs::DeleteTree(tempDir);
         throw std::runtime_error("无法解包 " + source.loader + " 安装器" +
