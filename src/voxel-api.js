@@ -104,7 +104,7 @@
     mirrorForge: true,
     mirrorNeoForge: true,
     forceLocal: false,
-    versionIsolation: false,
+    versionIsolation: true,
     downloadSource: '',
     lastPlayed: ''
   }

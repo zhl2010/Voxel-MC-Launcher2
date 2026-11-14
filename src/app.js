@@ -450,7 +450,18 @@ function bindNavigation() {
   })
 
   document.addEventListener('click', async (event) => {
-    const target = event.target instanceof Element ? event.target.closest('[data-open-path]') : null
+    if (!(event.target instanceof Element)) return
+    // 内容页的两个「打开文件夹」：开当前目标真正落盘的那个目录（实例或共用）
+    const modsButton = event.target.closest('[data-open-mods]')
+    if (modsButton) {
+      try {
+        await invoke(api.openPath(resolveContentFolder()))
+      } catch (error) {
+        toast(error.message, 'error')
+      }
+      return
+    }
+    const target = event.target.closest('[data-open-path]')
     if (!target) return
     try {
       await invoke(api.openPath(target.dataset.openPath))
@@ -2266,20 +2277,8 @@ function updateModsTargetUI(target) {
 
   // 真实落盘目录：实例目标 → versions/<id>/<mods|resourcepacks|shaderpacks>，
   // 否则 → 公共 gameDir/<...>
-  const folder =
-    target.projectType === 'resourcepack'
-      ? 'resourcepacks'
-      : target.projectType === 'shader'
-        ? 'shaderpacks'
-        : 'mods'
-  let saveDir = ''
-  if (state.modSaveDir) {
-    saveDir = state.modSaveDir
-  } else if (target.targetVersionId) {
-    saveDir = `${state.appInfo?.versionsDir || ''}\\${target.targetVersionId}\\${folder}`
-  } else {
-    saveDir = state.appInfo?.modsDir || ''
-  }
+  const folder = contentFolderName(target.projectType)
+  const saveDir = resolveContentFolder()
   dom.modsFolderPath.textContent = saveDir || '—'
   dom.modsFolderPath.title = saveDir || ''
 
@@ -2300,6 +2299,25 @@ function updateModsTargetUI(target) {
     dom.modsCompatTitle.textContent = '当前实例没有模组加载器'
     dom.modsCompatText.textContent = `原版 Minecraft ${target.version} 无法加载模组，请先在版本库选择 Fabric、Quilt、Forge 或 NeoForge。`
   }
+}
+
+/** 内容类型对应的子目录名。 */
+function contentFolderName(projectType) {
+  if (projectType === 'resourcepack') return 'resourcepacks'
+  if (projectType === 'shader') return 'shaderpacks'
+  return 'mods'
+}
+
+/** 当前内容目标真正落盘的目录：实例 → versions/<id>/<子目录>，否则 → 公共 <子目录>。 */
+function resolveContentFolder() {
+  const info = state.appInfo || {}
+  const target = getModTarget()
+  if (state.modSaveDir) return state.modSaveDir
+  const folder = contentFolderName(target.projectType)
+  if (target.targetVersionId) {
+    return `${info.versionsDir || ''}\\${target.targetVersionId}\\${folder}`
+  }
+  return `${info.gameDir || ''}\\${folder}`
 }
 
 /** 说明文件到底会落到哪个目录，以及为什么。 */
