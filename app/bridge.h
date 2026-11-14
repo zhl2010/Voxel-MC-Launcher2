@@ -47,6 +47,9 @@ class Bridge : public std::enable_shared_from_this<Bridge> {
     void Register(const std::string& cmd, SyncHandler handler);
     void RegisterAsync(const std::string& cmd, AsyncHandler handler);
 
+    // file:// 兜底路径的信任目录（应用自带前端目录）。空的表示不信任任何 file:// 来源。
+    void SetTrustedFileDir(const std::wstring& dir) { trustedFileDir_ = dir; }
+
     bool Attach(ICoreWebView2* web);
     void Detach();
     void Shutdown();
@@ -69,6 +72,7 @@ class Bridge : public std::enable_shared_from_this<Bridge> {
     Microsoft::WRL::ComPtr<ICoreWebView2> web_;
     Microsoft::WRL::ComPtr<ICoreWebView2WebMessageReceivedEventHandler> messageHandler_;
     EventRegistrationToken token_{};
+    std::wstring trustedFileDir_;
 
     // 工作线程槽位：done 让 UI 线程能把已经跑完的线程 join 掉再回收。
     // 原来每个异步命令都 emplace_back 一个 std::thread 且永不清理，

@@ -9,13 +9,20 @@ namespace {
 
 constexpr UINT kPumpMessage = WM_APP + 41;
 
-// 只接受虚拟主机映射出来的页面（生产）或本地 file://（运行时过旧时的兜底）。
-// 没有这道校验时，页面里任何一次跳转到外部网站，对方就能调用本地命令表
-// （改游戏目录、打开任意路径、启动游戏）。
-bool TrustedSource(const std::wstring& source) {
+// 只接受虚拟主机映射出来的页面（生产）或应用自带前端目录下的 file://（运行时
+// 过旧时的兜底）。没有这道校验时，页面里任何一次跳转到外部网站，对方就能调用
+// 本地命令表（改游戏目录、打开任意路径、启动游戏）。
+bool TrustedSource(const std::wstring& source, const std::wstring& fileDir) {
     if (source.empty()) return true;  // 个别运行时取不到来源，放行以免误伤
-    if (source.rfind(L"https://voxel.local", 0) == 0) return true;
-    if (source.rfind(L"file://", 0) == 0) return true;
+    // 必须匹配到 host 后的 '/'：前缀不带斜杠的话 voxel.local.evil.com 也能命中
+    if (source.rfind(L"https://voxel.local/", 0) == 0) return true;
+    if (!fileDir.empty() && source.rfind(L"file:///", 0) == 0) {
+        // file:// 兜底只信任应用自带的前端目录，用户从别处打开的 HTML 不给 IPC 权限
+        std::wstring prefix = L"file:///" + fileDir;
+        for (auto& ch : prefix) if (ch == L'\\') ch = L'/';
+        if (prefix.back() != L'/') prefix.push_back(L'/');
+        if (source.rfind(prefix, 0) == 0) return true;
+    }
     return false;
 }
 
@@ -132,8 +139,8 @@ bool Bridge::Attach(ICoreWebView2* web) {
         [this](ICoreWebView2* /*sender*/, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
             // 先验来源：只信任本地映射页面，其它一律丢弃
             LPWSTR source = nullptr;
-            const bool trusted =
-                SUCCEEDED(args->get_Source(&source)) && TrustedSource(source ? source : L"");
+            const bool trusted = SUCCEEDED(args->get_Source(&source)) &&
+                                 TrustedSource(source ? source : L"", trustedFileDir_);
             if (source) CoTaskMemFree(source);
             if (!trusted) return S_OK;
 

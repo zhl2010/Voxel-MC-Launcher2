@@ -262,6 +262,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
 
     // ---------------------- IPC 桥与命令表 ----------------------
     auto bridge = std::make_shared<Bridge>();
+    // file:// 兜底只信任应用自带前端目录
+    bridge->SetTrustedFileDir(srcDir);
 
     // 设置读得频繁（几乎每个命令都要），写只在 settings_save；
     // 后台线程持有的是快照，真正改动时整份替换，避免数据竞争。
