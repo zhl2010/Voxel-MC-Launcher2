@@ -64,15 +64,25 @@ bool LoadAccount(Account& out) {
     if (wrapper.is_discarded() || !wrapper.is_object()) return false;
 
     nlohmann::json payload;
+    bool reencrypt = false;
     if (wrapper.contains("payload") && wrapper["payload"].is_string()) {
-        // 旧版用 Electron safeStorage（DPAPI）加密，换了实现就解不开；此时要求重新登录，
-        // 而不是把一个解不开的密文当成空账户。
-        if (wrapper.value("encrypted", false)) return false;
-        const std::string decoded = crypto::Base64Decode(wrapper["payload"].get<std::string>());
-        if (decoded.empty()) return false;
-        payload = nlohmann::json::parse(decoded, nullptr, false);
+        const std::string encoded = wrapper["payload"].get<std::string>();
+        if (wrapper.value("encrypted", false)) {
+            // DPAPI 加密格式（含旧版 Electron safeStorage：同样是 DPAPI，无附加熵时
+            // 一般也能解开）。解不开就要求重新登录，不把密文当成空账户。
+            std::string plain;
+            if (!crypto::UnprotectData(crypto::Base64Decode(encoded), plain)) return false;
+            payload = nlohmann::json::parse(plain, nullptr, false);
+        } else {
+            // 旧版明文格式：读出来后顺手升级成加密存储
+            const std::string decoded = crypto::Base64Decode(encoded);
+            if (decoded.empty()) return false;
+            payload = nlohmann::json::parse(decoded, nullptr, false);
+            reencrypt = payload.is_object();
+        }
     } else {
         payload = wrapper;  // 兼容直接写成裸账户对象的旧文件
+        reencrypt = payload.is_object();
     }
     if (payload.is_discarded() || !payload.is_object()) return false;
 
@@ -91,15 +101,19 @@ bool LoadAccount(Account& out) {
         out.userProperties = payload["userProperties"];
     }
     if (out.uuid.empty() && out.type == "crack") out.uuid = crypto::OfflineUuid(name);
+    if (reencrypt) SaveAccount(out);  // 静默升级为 DPAPI 加密
     return true;
 }
 
 bool SaveAccount(const Account& account) {
     if (account.name.empty()) return false;
+    const std::string plain = account.ToJson().dump();
+    std::string blob;
+    if (!crypto::ProtectData(plain, blob)) return false;
     nlohmann::json wrapper = {
         {"version", 1},
-        {"encrypted", false},
-        {"payload", crypto::Base64Encode(account.ToJson().dump())},
+        {"encrypted", true},
+        {"payload", crypto::Base64Encode(blob)},
     };
     return fs::WriteTextAtomic(SessionFile(), wrapper.dump());
 }

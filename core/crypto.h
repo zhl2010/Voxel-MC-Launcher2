@@ -19,4 +19,9 @@ std::string OfflineUuid(const std::string& playerName);
 std::string Base64Encode(const std::string& bytes);
 std::string Base64Decode(const std::string& text);
 
+// DPAPI（CryptProtectData，当前用户作用域）：账号令牌落盘前的加解密。
+// 密文只能由同一 Windows 账户解开，别的用户或拷走的文件都拿不到明文。
+bool ProtectData(const std::string& plain, std::string& out);
+bool UnprotectData(const std::string& blob, std::string& out);
+
 }  // namespace voxel::crypto

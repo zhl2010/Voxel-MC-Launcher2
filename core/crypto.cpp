@@ -1,11 +1,13 @@
 #include "crypto.h"
 
 #include <windows.h>
+#include <wincrypt.h>
 #include <bcrypt.h>
 #include <fstream>
 #include <vector>
 
 #pragma comment(lib, "bcrypt.lib")
+#pragma comment(lib, "crypt32.lib")
 
 namespace voxel::crypto {
 namespace {
@@ -193,6 +195,35 @@ std::string Base64Decode(const std::string& text) {
         }
     }
     return out;
+}
+
+bool ProtectData(const std::string& plain, std::string& out) {
+    DATA_BLOB input{};
+    input.pbData = reinterpret_cast<BYTE*>(const_cast<char*>(plain.data()));
+    input.cbData = static_cast<DWORD>(plain.size());
+    DATA_BLOB result{};
+    if (!CryptProtectData(&input, nullptr, nullptr, nullptr, nullptr,
+                          CRYPTPROTECT_UI_FORBIDDEN, &result)) {
+        return false;
+    }
+    out.assign(reinterpret_cast<const char*>(result.pbData), result.cbData);
+    LocalFree(result.pbData);
+    return true;
+}
+
+bool UnprotectData(const std::string& blob, std::string& out) {
+    if (blob.empty()) return false;
+    DATA_BLOB input{};
+    input.pbData = reinterpret_cast<BYTE*>(const_cast<char*>(blob.data()));
+    input.cbData = static_cast<DWORD>(blob.size());
+    DATA_BLOB result{};
+    if (!CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr,
+                            CRYPTPROTECT_UI_FORBIDDEN, &result)) {
+        return false;
+    }
+    out.assign(reinterpret_cast<const char*>(result.pbData), result.cbData);
+    LocalFree(result.pbData);
+    return true;
 }
 
 }  // namespace voxel::crypto
