@@ -644,6 +644,64 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
         return nlohmann::json::object();
     });
 
+    // 以已安装版本为模板新建一个同配置实例。
+    // 实例的 json 只写 id + inheritsFrom，client jar / libraries / assets 全部复用源版本，
+    // 所以「再下载一次同一个版本」几乎不占额外空间，却能拿到独立的版本目录、名称和图标
+    // （配合版本隔离就是互不干扰的存档与模组）。
+    bridge->Register("versions_create_instance", [&](const nlohmann::json& args) {
+        const std::string source = args.value("source", std::string());
+        if (!voxel::SafeVersionId(source)) throw std::runtime_error("版本名非法");
+        const std::string requested = args.value("name", std::string());
+        if (!requested.empty() && !voxel::SafeVersionId(requested)) {
+            throw std::runtime_error("实例名包含非法字符（\\ / : * ? \" < > |）");
+        }
+
+        const nlohmann::json current = Snapshot();
+        const std::wstring gameDir = voxel::ResolveGameDir(current);
+        const std::wstring versionsDir = voxel::fs::Join(gameDir, L"versions");
+
+        // 源版本必须能解析，否则新建出来的实例启动不了
+        std::wstring error;
+        const voxel::ResolvedVersion resolved =
+            voxel::ResolveVersion(gameDir, current, source, &error);
+        if (resolved.levels.empty()) {
+            throw std::runtime_error(error.empty() ? "源版本不可用：" + source
+                                                   : voxel::WideToUtf8(error));
+        }
+
+        // 留空就按 <源版本>-2、-3 递增；用户起名撞车时同样自动加序号
+        const std::string base = requested.empty() ? source : requested;
+        std::string id = base;
+        for (int n = 2;
+             voxel::fs::Exists(voxel::fs::Join(versionsDir, voxel::Utf8ToWide(id))); ++n) {
+            id = base + "-" + std::to_string(n);
+        }
+
+        std::string type = "release";
+        const std::wstring sourceJson =
+            voxel::fs::Join(voxel::fs::Join(versionsDir, voxel::Utf8ToWide(source)),
+                            voxel::Utf8ToWide(source) + L".json");
+        const nlohmann::json sourceProfile =
+            nlohmann::json::parse(voxel::fs::ReadText(sourceJson), nullptr, false);
+        if (sourceProfile.is_object() && sourceProfile["type"].is_string()) {
+            type = sourceProfile["type"].get<std::string>();
+        }
+
+        const std::wstring dir = voxel::fs::Join(versionsDir, voxel::Utf8ToWide(id));
+        if (!voxel::fs::EnsureDir(dir)) {
+            throw std::runtime_error("无法创建实例目录：" + voxel::WideToUtf8(dir));
+        }
+        nlohmann::json profile = nlohmann::json::object();
+        profile["id"] = id;
+        profile["inheritsFrom"] = source;
+        profile["type"] = type;
+        if (!voxel::fs::WriteTextAtomic(voxel::fs::Join(dir, voxel::Utf8ToWide(id) + L".json"),
+                                        profile.dump(2))) {
+            throw std::runtime_error("写入实例配置失败");
+        }
+        return nlohmann::json{{"id", id}, {"source", source}};
+    });
+
     // ---- 版本显示名与自定义图标 ----
     // 只覆盖"显示"，不改 versions/<id>/<id>.json 里的 id（那是继承链的权威标识）。
     bridge->Register("versions_meta", [&](const nlohmann::json&) {

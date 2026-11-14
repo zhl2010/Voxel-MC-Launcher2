@@ -630,12 +630,12 @@ function renderVerifyButton() {
 }
 
 /**
- * 下载 / 校验选中版本。
- * 后端 game_verify 会把该版缺失的 client jar、libraries、assets 补齐并校验，
- * 所以未安装的版本是"下载"，已安装的版本是"校验修补"，共用同一条链路。
+ * 下载选中版本；已安装的版本则新建一个同配置实例。
+ * game_verify 会把缺失的 client jar、libraries、assets 补齐，所以两条路径共用同一条链路：
+ * 首次下载 = 装源版本；已安装再点 = 复制成新实例（文件共享，校验很快）。
  */
 async function handleDownloadVersion() {
-  const id = state.pendingVersion || state.settings.version
+  let id = state.pendingVersion || state.settings.version
   if (!id) {
     toast('请先选择一个版本', 'error')
     return
@@ -649,9 +649,29 @@ async function handleDownloadVersion() {
   }
 
   const button = dom.downloadVersion
-  const wasInstalled = Boolean(
-    state.versions.find((v) => v.id === id)?.installed
-  )
+  const sourceVersion = state.versions.find((v) => v.id === id)
+  const wasInstalled = Boolean(sourceVersion?.installed || sourceVersion?.local)
+
+  if (wasInstalled) {
+    // 已安装：新建一个继承自它的实例，而不是原地修补
+    const input = window.prompt(
+      `版本 ${id} 已安装。\n新建一个同配置实例（共享游戏文件，不额外占空间），可输入实例名：`,
+      ''
+    )
+    if (input === null) return // 用户取消
+    try {
+      const created = await invoke(api.createInstance({ source: id, name: input.trim() }))
+      appendLog('INFO', `已创建实例 ${created.id}（基于 ${id}）`)
+      id = created.id
+    } catch (error) {
+      appendLog('ERROR', `创建实例失败：${error.message}`)
+      toast(error.message, 'error')
+      return
+    }
+    state.pendingVersion = id
+    // 只刷新本地版本列表，不必强制重拉官方清单（下载占满带宽时那个请求容易超时）
+    await loadVersions().catch(() => {})
+  }
 
   state.verifyingVersionId = id
   if (button) {
@@ -685,15 +705,17 @@ async function handleDownloadVersion() {
       `完成：修补 ${result?.repaired ?? 0} 个，剩余缺失 ${result?.remaining ?? 0} 个`
     )
     if (result?.ok) {
-      toast(wasInstalled ? '文件完整，无需修补' : `版本 ${id} 下载完成`, 'success')
+      toast(wasInstalled ? `实例 ${id} 已创建` : `版本 ${id} 下载完成`, 'success')
     } else if ((result?.remaining ?? 0) > 0) {
       toast(`仍有 ${result.remaining} 个文件缺失，请检查网络后重试`, 'error')
     } else {
       toast('下载完成', 'success')
     }
-    // 重新拉清单，"已安装"角标才会更新
-    await loadVersions(true).catch(() => {})
-    updateVersionDetail()
+    // 重新扫本地清单，"已安装"角标才会更新；不强制重拉官方 manifest
+    await loadVersions().catch(() => {})
+    // 新建的实例只在「已安装」视图里出现，装完直接切过去，省得用户找不到
+    if (wasInstalled && result?.ok) switchDownloadTab('installed')
+    else updateVersionDetail()
   } catch (error) {
     appendLog('ERROR', `下载失败：${error.message}`)
     toast(error.message, 'error')
@@ -1152,6 +1174,23 @@ function switchDownloadTab(tab, options = {}) {
   })
 
   if (options.silent) return
+  // 「游戏版本」页只对应官方版本。若当前选中的是本机实例（从「已安装」页点过来的），
+  // 切回来时把选中项换回当前使用的官方版本，右侧保持标准的下载面板。
+  if (target === 'download') {
+    const current = state.versions.find((v) => v.id === state.pendingVersion)
+    if (current?.local) {
+      const active = state.versions.find(
+        (v) => v.id === getActiveVersion() && !v.local
+      )
+      state.pendingVersion = active ? active.id : ''
+      state.pendingLoader = 'vanilla'
+      if (state.pendingVersion) selectVersion(state.pendingVersion, { scroll: false })
+      else {
+        renderVersionList()
+        updateVersionDetail()
+      }
+    }
+  }
   if (target === 'installed') renderInstalledVersions()
   if (target === 'content') {
     // 实际函数名是 loadModsPage；之前这里写成 renderModsPage，
@@ -1327,6 +1366,27 @@ function populateContentTargets() {
       invoke(api.openVersionFolder(item.id)).catch((error) => toast(error.message, 'error'))
     })
 
+    const repairBtn = document.createElement('button')
+    repairBtn.className = 'ghost-btn small'
+    repairBtn.textContent = '校验修补'
+    repairBtn.addEventListener('click', async () => {
+      repairBtn.disabled = true
+      repairBtn.textContent = '校验中…'
+      try {
+        const result = await invoke(api.verifyFiles(item.id))
+        const remaining = result?.remaining ?? 0
+        if (remaining > 0) toast(`仍有 ${remaining} 个文件缺失，请检查网络后重试`, 'error')
+        else toast(`已校验 ${item.id}，文件完整`, 'success')
+        await loadVersions(true).catch(() => {})
+        renderInstalledVersions()
+      } catch (error) {
+        toast(error.message, 'error')
+      } finally {
+        repairBtn.disabled = false
+        repairBtn.textContent = '校验修补'
+      }
+    })
+
     const delBtn = document.createElement('button')
     delBtn.className = 'ghost-btn small danger'
     delBtn.textContent = '删除'
@@ -1342,7 +1402,7 @@ function populateContentTargets() {
       }
     })
 
-    actions.append(useBtn, folderBtn, delBtn)
+    actions.append(useBtn, folderBtn, repairBtn, delBtn)
     row.append(main, actions)
     fragment.append(row)
   }
@@ -1353,10 +1413,10 @@ function navigate(page) {
   if (!PAGE_TITLES[page]) return
   state.page = page
   if (page === 'versions' && !state.pendingVersion) {
-    // 只从"已安装"的版本里挑默认选中项。
+    // 只从"已安装"的官方版本里挑默认选中项；本机实例归「已安装」视图管。
     // 原来会退回到 state.versions[0]（官方清单第一条，比如 26.3），
     // 结果本机什么都没装却显示成选中了 26.3。
-    const installed = state.versions.filter((item) => item.installed || item.local)
+    const installed = state.versions.filter((item) => item.installed && !item.local)
     const activeId = getActiveVersion()
     const preferred = installed.some((item) => item.id === activeId)
       ? activeId
@@ -1414,18 +1474,21 @@ function scrollPendingVersionIntoView() {
 
 async function loadVersions(force = false) {
   if (state.versionsLoading) return
+  // 刷新失败时用它兜底：一次网络抖动不该把已经能用的列表变成空白
+  const previous = state.versions
   state.versionsLoading = true
   setRefreshing(true)
   setSync('loading', force ? '正在刷新版本清单' : '正在同步版本清单')
 
   try {
     const data = await invoke(api.getVersions(Boolean(force)))
-    state.versions = data.versions || []
+    const next = data.versions || []
+    // 先判空再落地：直接赋值会把上一份好数据覆盖成空，列表当场变白
+    if (!next.length) throw new Error(data.error || '版本清单为空')
+    state.versions = next
     state.latest = data.latest || { release: '', snapshot: '' }
     state.versionsSource = data.source || 'network'
     state.versionsError = data.error || ''
-
-    if (!state.versions.length) throw new Error('版本清单为空')
 
     // 注意：这里原来会在 settings.version 缺失时自动写入 latest.release，
     // 结果一台什么都没装的机器还没选版本就被"自动选中"了官方最新版（26.3），
@@ -1434,7 +1497,9 @@ async function loadVersions(force = false) {
     if (!state.pendingVersion || !state.versions.some((version) => version.id === state.pendingVersion)) {
       // 只认已安装的版本；一个都没装就保持"未选中"状态，
       // 不再退回到官方清单第一条（那会让人以为已经选好了 26.3）。
-      const installed = state.versions.filter((v) => v.installed || v.local)
+      // 只认已安装的官方版本；下载页右侧永远对应官方游戏版本，
+      // 本机实例的详情在「已安装」视图里看。
+      const installed = state.versions.filter((v) => v.installed && !v.local)
       const activeId = getActiveVersion()
       state.pendingVersion = installed.some((v) => v.id === activeId)
         ? activeId
@@ -1451,13 +1516,18 @@ async function loadVersions(force = false) {
     updateRuntimeStats()
     refreshHomeLoader()
   } catch (error) {
-    state.versions = []
+    // 保留刷新前的清单；只有本来就空才显示整页错误
+    state.versions = previous
     state.versionsError = error.message
-    setSync('error', '版本清单加载失败')
-    renderVersionError(error.message)
-    renderQuickError()
+    setSync(previous.length ? 'warn' : 'error', '版本清单加载失败')
+    if (previous.length) {
+      renderVersionList()
+      toast(`刷新版本清单失败：${error.message}`, 'error')
+    } else {
+      renderVersionError(error.message)
+      renderQuickError()
+    }
     updateHomeVersion()
-    toast(error.message, 'error')
   } finally {
     state.versionsLoading = false
     setRefreshing(false)
@@ -1501,7 +1571,9 @@ function updateSyncChip() {
 }
 
 function getFilteredVersions() {
-  let list = state.versions
+  // 下载页只列官方版本清单。本机安装出来的实例（含加载器派生版本）属于「已安装」视图，
+  // 混进来会让右侧详情变成实例面板，也让人分不清哪些是可以下载的游戏版本。
+  let list = state.versions.filter((version) => !version.local)
   if (state.filter === 'release') list = list.filter((version) => version.type === 'release')
   else if (state.filter === 'snapshot') list = list.filter((version) => version.type === 'snapshot')
   else if (state.filter === 'old') {
@@ -1569,12 +1641,10 @@ function renderVersionList() {
     const title = document.createElement('strong')
     title.textContent = version.displayName || version.id
     const subtitle = document.createElement('span')
-    // 真身永远显示；带自定义名的实例更要显示，否则看不出它是什么
-    const identity = versionIdentity(version)
-    const suffix = version.local
-      ? [version.installed ? '已安装' : '']
-      : [formatDate(version.releaseTime), version.installed ? '已安装' : '']
-    subtitle.textContent = [identity, ...suffix].filter(Boolean).join(' · ')
+    // 下载页只展示游戏版本本身：日期保留，"已安装"状态只在「已安装」视图里体现
+    subtitle.textContent = [versionIdentity(version), formatDate(version.releaseTime)]
+      .filter(Boolean)
+      .join(' · ')
     main.append(title, subtitle)
 
     const badge = document.createElement('span')
@@ -1751,12 +1821,11 @@ function updateVersionDetail() {
   // 标题下方永远显示"真身"：自定义名遮不住它实际是什么版本 + 什么加载器
   dom.detailDate.textContent = versionIdentity(version)
 
-  // 下载按钮：未安装时是"下载"，已安装时仍可用（走校验修补，只补缺失/损坏的文件）
+  // 下载按钮常驻。已安装的版本再点一次是「以它为模板新建一个同配置实例」，
+  // 而不是变成校验修补——想修补请到「已安装」视图里操作。
   if (dom.downloadVersion) {
     dom.downloadVersion.disabled = false
-    dom.downloadVersion.textContent = version.installed || version.local
-      ? '校验并修补文件'
-      : '下载此版本'
+    dom.downloadVersion.textContent = '下载此版本'
   }
 }
 

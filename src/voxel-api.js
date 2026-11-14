@@ -245,6 +245,12 @@
     deleteVersion: function (versionId) {
       return call('versions_delete', { versionId: versionId })
     },
+    createInstance: function (payload) {
+      return call('versions_create_instance', {
+        source: payload.source,
+        name: payload.name || ''
+      })
+    },
     getVersionMeta: function () {
       return call('versions_meta')
     },
