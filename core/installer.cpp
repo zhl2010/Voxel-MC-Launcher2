@@ -200,6 +200,26 @@ class PlanBuilder {
     std::unordered_set<std::wstring> seen_;
 };
 
+// group:artifact:version[:classifier] → group:artifact[:classifier]
+// 用于判断父版本与加载器是否在抢同一个 artifact（只差版本号）。
+std::string LibraryArtifactKey(const std::string& name) {
+    std::vector<std::string> parts;
+    std::string token;
+    for (char ch : name) {
+        if (ch == ':') {
+            parts.push_back(token);
+            token.clear();
+        } else {
+            token.push_back(ch);
+        }
+    }
+    parts.push_back(token);
+    if (parts.size() < 3) return std::string();
+    std::string key = parts[0] + ":" + parts[1];
+    if (parts.size() > 3) key += ":" + parts[3];
+    return key;
+}
+
 nlohmann::json MergeVersionJson(const nlohmann::json& parent, const nlohmann::json& child) {
     nlohmann::json merged = parent;
     for (auto it = child.begin(); it != child.end(); ++it) {
@@ -208,8 +228,25 @@ nlohmann::json MergeVersionJson(const nlohmann::json& parent, const nlohmann::js
     merged["id"] = child.value("id", parent.value("id", std::string()));
 
     nlohmann::json libraries = nlohmann::json::array();
+    // 子版本（加载器）对同一 artifact 的要求更新：例如 1.7.10 自带 guava 15.0，
+    // Forge 要求 17.0。类路径先到先得，留着旧版本会让 Forge 抛
+    // NoSuchMethodError（CharSource.readLines），所以父版本里被 child 覆盖的条目要丢掉。
+    std::unordered_set<std::string> childKeys;
+    if (child.contains("libraries") && child["libraries"].is_array()) {
+        for (const auto& entry : child["libraries"]) {
+            if (!entry.is_object()) continue;
+            const std::string key = LibraryArtifactKey(entry.value("name", std::string()));
+            if (!key.empty()) childKeys.insert(key);
+        }
+    }
     if (parent.contains("libraries") && parent["libraries"].is_array()) {
-        for (const auto& entry : parent["libraries"]) libraries.push_back(entry);
+        for (const auto& entry : parent["libraries"]) {
+            if (entry.is_object()) {
+                const std::string key = LibraryArtifactKey(entry.value("name", std::string()));
+                if (!key.empty() && childKeys.count(key)) continue;
+            }
+            libraries.push_back(entry);
+        }
     }
     if (child.contains("libraries") && child["libraries"].is_array()) {
         for (const auto& entry : child["libraries"]) libraries.push_back(entry);

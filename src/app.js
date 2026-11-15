@@ -2254,7 +2254,20 @@ function getModTarget() {
 
   // 用户可以在下载页手动指定筛选版本与加载器，不再强制跟随主界面当前版本。
   const version = state.mods.gameVersion || activeBase
-  const loader = state.mods.loader || state.settings?.loader || 'vanilla'
+  // 没手动选加载器时，先看当前实例自己是什么加载器（1.7.10-forge-xxx → forge），
+  // 不能用 settings.loader 兜底：那里几乎总是 vanilla，会把 Forge 模组装进
+  // 原版实例的 mods 目录，看起来就像"隔离目录失效"。
+  const loaderOfId = (id) => {
+    const lower = String(id || '').toLowerCase()
+    if (lower.includes('-neoforge')) return 'neoforge'
+    if (lower.includes('-fabric')) return 'fabric'
+    if (lower.includes('-quilt')) return 'quilt'
+    if (lower.includes('-forge')) return 'forge'
+    if (lower.includes('-optifine')) return 'optifine'
+    return 'vanilla'
+  }
+  const loader =
+    state.mods.loader || loaderOfId(activeId) || state.settings?.loader || 'vanilla'
   // 「自动」安装目标：用上面选的游戏版本 + 加载器去找对应实例（1.21.11 + fabric →
   // 1.21.11-fabric-x），把文件装进它自己的 mods。
   // 注意只有开启版本隔离时游戏才读 versions/<id>/mods；隔离关着时游戏读公共 mods，
@@ -2813,7 +2826,7 @@ async function installMod(mod, button, target, chosenVersionId = '') {
           }`,
       'success'
     )
-    appendLog('INFO', `已安装模组 ${result.filename}（${mod.title}）到 ${result.directory || ''}。`)
+    appendLog('INFO', `已安装模组 ${result.fileName}（${mod.title}）到 ${result.path || ''}。`)
     await loadInstalledMods(true)
     button.textContent = '已安装'
     button.disabled = true
