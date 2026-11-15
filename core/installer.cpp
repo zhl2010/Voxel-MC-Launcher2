@@ -470,22 +470,20 @@ VersionPlan BuildPlan(const ResolvedVersion& version, const nlohmann::json& sett
 
             if (!plannedArtifact && !name.empty() && !library.contains("natives")) {
                 // Fabric 的 profile JSON 不带 downloads 块，库条目只有 name + url（maven 根）
-                // + 可选 sha1/size：按 maven 坐标布局拼出下载地址。拼不出地址才退回
-                // "只检查本地是否存在"的老路径。
+                // + 可选 sha1/size：按 maven 坐标布局拼出下载地址。
+                // 老版本 Forge（≤1.12.2）的条目常常连 url 都不写，它们都在 Mojang 官方
+                // maven 上；不补默认值就会退化成"只检查本地"，缺库时无法下载，启动即崩。
                 const ArtifactRef guessed = GuessArtifact(name);
                 if (guessed.valid) {
                     const std::wstring dest =
                         FromSlashPath(fs::Join(gameDir, L"libraries"), guessed.path);
                     if (!dest.empty()) {
                         std::string mavenRoot = library.value("url", std::string());
-                        if (!mavenRoot.empty()) {
-                            if (mavenRoot.back() != '/') mavenRoot.push_back('/');
-                            builder.AddFile("运行库", dest, mavenRoot + guessed.path,
-                                            library.value("sha1", std::string()),
-                                            library.value("size", uint64_t{0}), verifyHashes);
-                        } else {
-                            builder.AddFile("运行库", dest, std::string(), std::string(), 0, false);
-                        }
+                        if (mavenRoot.empty()) mavenRoot = "https://libraries.minecraft.net/";
+                        if (mavenRoot.back() != '/') mavenRoot.push_back('/');
+                        builder.AddFile("运行库", dest, mavenRoot + guessed.path,
+                                        library.value("sha1", std::string()),
+                                        library.value("size", uint64_t{0}), verifyHashes);
                     }
                 }
             }

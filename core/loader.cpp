@@ -260,27 +260,44 @@ nlohmann::json InstallNeoLike(const nlohmann::json& settings, const std::wstring
         }
     }
 
-    // 3) 用 bsdtar 解出 version.json（installer 是 zip）
+    // 3) 用 bsdtar 解出 profile（installer 是 zip）
+    //    1.13+ 的安装器根目录有 version.json；1.7.10～1.12.2 只有 install_profile.json，
+    //    版本描述嵌在它的 versionInfo 字段里。只认 version.json 会让老版本 Forge 报
+    //    "tar.exe 返回错误码 1"（成员不存在）。
     //    注意必须传 tar.exe 的完整路径：CreateProcessW 的第一个参数是程序路径，
     //    只写 "tar" 不会去 PATH 里找，会直接返回 ERROR_FILE_NOT_FOUND（错误码 2）。
     int exitCode = 0;
     std::wstring tarError;
+    bool oldStyle = false;
     if (!proc::RunCapture(TarExe(), {L"-xf", jarPath, L"-C", tempDir, L"version.json"}, tempDir,
                           120000, &exitCode, &tarError)) {
-        fs::DeleteTree(tempDir);
-        throw std::runtime_error("无法解包 " + source.loader + " 安装器" +
-                                 (tarError.empty() ? "" : "：" + WideToUtf8(tarError)));
+        oldStyle = true;
+        tarError.clear();
+        if (!proc::RunCapture(TarExe(),
+                              {L"-xf", jarPath, L"-C", tempDir, L"install_profile.json"}, tempDir,
+                              120000, &exitCode, &tarError)) {
+            fs::DeleteTree(tempDir);
+            throw std::runtime_error("无法解包 " + source.loader + " 安装器" +
+                                     (tarError.empty() ? "" : "：" + WideToUtf8(tarError)));
+        }
     }
 
-    const std::string raw = fs::ReadText(fs::Join(tempDir, L"version.json"));
+    const std::string raw =
+        fs::ReadText(fs::Join(tempDir, oldStyle ? L"install_profile.json" : L"version.json"));
     fs::DeleteTree(tempDir);
     if (raw.empty()) {
-        throw std::runtime_error(source.loader + " 安装器里没有 version.json");
+        throw std::runtime_error(source.loader + " 安装器里没有 version.json 或 install_profile.json");
     }
 
     nlohmann::json profile = nlohmann::json::parse(raw, nullptr, false);
     if (profile.is_discarded() || !profile.is_object()) {
-        throw std::runtime_error(source.loader + " 的 version.json 格式异常");
+        throw std::runtime_error(source.loader + " 的安装信息格式异常");
+    }
+    if (oldStyle) {
+        if (!profile.contains("versionInfo") || !profile["versionInfo"].is_object()) {
+            throw std::runtime_error(source.loader + " 安装器缺少 versionInfo，无法生成版本");
+        }
+        profile = profile["versionInfo"];
     }
 
     // 4) 落地成独立实例
