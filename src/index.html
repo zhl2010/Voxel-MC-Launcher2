@@ -302,7 +302,7 @@
                 <span class="info-icon"><svg><use href="#i-cube"></use></svg></span>
                 <div>
                   <h3>运行环境</h3>
-                  <p>由 eml-lib 自动准备</p>
+                  <p>由启动器自动准备</p>
                 </div>
                 <span class="ready-chip"><i class="status-dot"></i>就绪</span>
               </div>
@@ -429,7 +429,7 @@
 
               <div class="detail-note">
                 <svg><use href="#i-shield"></use></svg>
-                <p>首次使用某个版本时，eml-lib 会校验文件并自动安装匹配的 Java 运行时。</p>
+                <p>首次使用某个版本时，启动器会校验文件并自动安装匹配的 Java 运行时。</p>
               </div>
 
               <!-- 下载此版本：未安装时补齐 client jar / libraries / assets；
@@ -735,6 +735,14 @@
                 <input id="fullscreen" type="checkbox" data-setting="fullscreen" />
                 <i class="toggle"></i>
               </label>
+              <label class="toggle-row">
+                <span>
+                  <strong>默认中文界面</strong>
+                  <small>启动时把游戏语言设为简体中文，并跳过首次的无障碍引导页</small>
+                </span>
+                <input id="gameChinese" type="checkbox" data-setting="gameChinese" />
+                <i class="toggle"></i>
+              </label>
             </section>
 
             <section class="settings-card">
@@ -788,7 +796,7 @@
                 <span>HTTP / HTTPS 代理</span>
                 <input id="proxyUrl" type="text" placeholder="例如 http://127.0.0.1:7890，留空为直连" spellcheck="false" />
               </label>
-              <p class="field-hint">代理会同时用于启动器元数据请求和 eml-lib 的游戏资源下载。只支持 http:// 或 https:// 代理。</p>
+              <p class="field-hint">代理会同时用于启动器元数据请求和游戏资源下载。只支持 http:// 或 https:// 代理。</p>
               <label class="toggle-row">
                 <span>
                   <strong>Mojang 资源镜像</strong>
@@ -926,14 +934,12 @@
               <div class="settings-head">
                 <div>
                   <h3>关于 Voxel</h3>
-                  <p>基于 Electron 与 eml-lib 构建</p>
+                  <p>基于 C++ / WebView2 构建</p>
                 </div>
                 <span class="mini-badge">ABOUT</span>
               </div>
               <div class="about-rows">
                 <div><span>启动器版本</span><strong id="aboutLauncher">—</strong></div>
-                <div><span>eml-lib</span><strong id="aboutEml">—</strong></div>
-                <div><span>Electron</span><strong id="aboutElectron">—</strong></div>
                 <div><span>平台</span><strong id="aboutPlatform">—</strong></div>
               </div>
               <p class="disclaimer">Voxel Launcher 是非官方启动器，与 Mojang Studios 或 Microsoft 无关。Minecraft 是 Mojang Studios 的商标。</p>
@@ -964,7 +970,7 @@
             <div id="logConsole" class="console-body" tabindex="0" aria-label="运行日志"></div>
             <div class="console-foot">
               <span id="logCount">0 条记录</span>
-              <span>下载进度由 eml-lib 提供</span>
+              <span>下载进度由启动器提供</span>
             </div>
           </section>
         </section>
@@ -1036,7 +1042,7 @@
             </span>
             <svg class="ms-arrow"><use href="#i-chevron"></use></svg>
           </button>
-          <p class="privacy-note">Microsoft 登录由 eml-lib 完成。访问令牌和刷新令牌会通过系统安全存储保存在本机（系统支持时加密），下次启动自动恢复；退出账户会清除。</p>
+          <p class="privacy-note">Microsoft 登录由启动器完成。访问令牌和刷新令牌会通过系统安全存储保存在本机（系统支持时加密），下次启动自动恢复；退出账户会清除。</p>
         </div>
 
         <div class="auth-pane" data-auth-pane="yggdrasil" hidden>
@@ -1101,6 +1107,6 @@
     <div id="toastStack" class="toast-stack" aria-live="polite"></div>
 
     <script src="./voxel-api.js"></script>
-    <script src="./app.js" type="module"></script>
+    <script src="./app.js"></script>
   </body>
 </html>

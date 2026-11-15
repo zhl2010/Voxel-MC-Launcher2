@@ -28,6 +28,47 @@ std::string NowIso() {
     return buffer;
 }
 
+// 首次启动时游戏默认英文界面，还会弹无障碍引导页。启动前改写 options.txt：
+// 语言设为简体中文、onboardAccessibility 设为 false。
+// 只覆盖这两个键，玩家在游戏里调过的其它选项原样保留。
+void ApplyChineseDefaults(const std::wstring& runtimeDir) {
+    const std::wstring path = fs::Join(runtimeDir, L"options.txt");
+    const std::string raw = fs::ReadText(path);
+
+    std::vector<std::string> lines;
+    size_t begin = 0;
+    while (begin < raw.size()) {
+        const size_t end = raw.find('\n', begin);
+        std::string line =
+            end == std::string::npos ? raw.substr(begin) : raw.substr(begin, end - begin);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        lines.push_back(line);
+        if (end == std::string::npos) break;
+        begin = end + 1;
+    }
+
+    bool hasLang = false;
+    bool hasOnboard = false;
+    for (auto& line : lines) {
+        if (line.rfind("lang:", 0) == 0) {
+            line = "lang:zh_cn";
+            hasLang = true;
+        } else if (line.rfind("onboardAccessibility:", 0) == 0) {
+            line = "onboardAccessibility:false";
+            hasOnboard = true;
+        }
+    }
+    if (!hasLang) lines.push_back("lang:zh_cn");
+    if (!hasOnboard) lines.push_back("onboardAccessibility:false");
+
+    std::string out;
+    for (const auto& line : lines) {
+        out += line;
+        out.push_back('\n');
+    }
+    fs::WriteTextAtomic(path, out);
+}
+
 bool UsableArgument(const std::string& value) {
     if (value.find_first_not_of(" \t") == std::string::npos) return false;
     if (value.find("${") != std::string::npos) return false;
@@ -561,6 +602,9 @@ void Launcher::RunImpl(nlohmann::json settings, Account account, std::wstring ga
     const std::wstring runtimeDir =
         isolation ? fs::Join(fs::Join(gameDir, L"versions"), Utf8ToWide(version.id)) : gameDir;
     fs::EnsureDir(runtimeDir);
+
+    // 启动前写入中文界面与跳过无障碍引导（可在设置里关闭）
+    if (settings.value("gameChinese", true)) ApplyChineseDefaults(runtimeDir);
 
     EmitGame(emit, "phase", nlohmann::json{{"key", "download"},
                                            {"step", 1},

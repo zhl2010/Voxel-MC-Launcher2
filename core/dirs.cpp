@@ -73,8 +73,10 @@ void AddJavaHome(std::vector<JavaInfo>& out, std::set<std::wstring>& seen, const
     info.home = home;
     const std::wstring javaw = fs::Join(fs::Join(home, L"bin"), L"javaw.exe");
     const std::wstring java = fs::Join(fs::Join(home, L"bin"), L"java.exe");
-    if (fs::Exists(javaw)) info.path = javaw;
-    else if (fs::Exists(java)) info.path = java;
+    // 优先 java.exe：CREATE_NO_WINDOW 会隐藏控制台窗口，但 stdout/stderr 仍能被管道捕获，
+    // 游戏崩溃时才能在日志里看到真实错误。用 javaw.exe 一旦崩溃就是"启动了但没窗口也没报错"。
+    if (fs::Exists(java)) info.path = java;
+    else if (fs::Exists(javaw)) info.path = javaw;
     else return;
 
     info.version = ReadReleaseVersion(home);

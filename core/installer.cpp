@@ -113,12 +113,15 @@ struct ArtifactRef {
 ArtifactRef ReadArtifact(const nlohmann::json& node) {
     ArtifactRef artifact;
     if (!node.is_object()) return artifact;
-    if (!node.contains("path") || !node["path"].is_string()) return artifact;
-    artifact.path = node["path"].get<std::string>();
+    // path 只对 libraries 有意义；downloads.client 不带 path，不能因此判 invalid，
+    // 否则客户端 jar 永远不会被下载，启动时直接崩（javaw 还会把错误吞掉）。
+    if (node.contains("path") && node["path"].is_string()) {
+        artifact.path = node["path"].get<std::string>();
+    }
     artifact.url = node.value("url", std::string());
     artifact.sha1 = node.value("sha1", std::string());
     artifact.size = node.value("size", static_cast<uint64_t>(0));
-    artifact.valid = true;
+    artifact.valid = !artifact.url.empty();
     return artifact;
 }
 

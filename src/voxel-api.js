@@ -1,8 +1,8 @@
 /*
  * Voxel Launcher —— Tauri 前端适配层
  *
- * 职责：替代 Electron 的 preload.cjs，把 `window.voxel` 的方法名、参数顺序和返回形状
- *      原样保留（对齐 preload.cjs 的 34 个方法），内部改用 Tauri 的 invoke / listen。
+ * 职责：启动器原生桥接层，把 `window.voxel` 的方法名、参数顺序和返回形状
+ *      原样保留，内部改用原生进程通信。
  *      因此 renderer 侧的 app.js 一行都不用改，重构的爆炸半径被限制在这一层以下。
  *
  * 设计约束：
@@ -117,8 +117,6 @@
       gameState: { status: 'idle', current: null, account: null },
       appInfo: {
         version: '0.1.0',
-        emlVersion: '—',
-        electron: '—',
         chrome: '—',
         node: '—',
         platform: 'win32',
@@ -380,5 +378,35 @@
     writable: false,
     configurable: false,
     enumerable: true
+  })
+
+  /*
+   * 全局错误兜底：把任何未捕获的 JS 异常打到启动遮罩上，而不是让界面永远
+   * 停在"正在唤醒方块世界…"。app.js 的 init() 如果在 setBoot 之前抛错，
+   * 没有这层兜底用户只会看到一个转不完的加载页，根本不知道哪里坏了。
+   */
+  function showBootErrorText(message) {
+    try {
+      var text = document.getElementById('bootText')
+      var retry = document.getElementById('bootRetry')
+      if (text) text.textContent = '启动出错：' + String(message)
+      if (retry) retry.hidden = false
+    } catch (e) {
+      // 兜底本身不能再抛
+    }
+  }
+
+  window.addEventListener('error', function (event) {
+    var msg = event && event.message ? event.message : '未知错误'
+    if (event && event.filename) msg += '（' + event.filename + ':' + event.lineno + '）'
+    console.error('[voxel] 全局错误：', event)
+    showBootErrorText(msg)
+  })
+
+  window.addEventListener('unhandledrejection', function (event) {
+    var reason = event && event.reason
+    var msg = reason && reason.message ? reason.message : String(reason)
+    console.error('[voxel] 未处理的 Promise 拒绝：', reason)
+    showBootErrorText(msg)
   })
 })()

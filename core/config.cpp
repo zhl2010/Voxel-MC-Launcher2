@@ -64,6 +64,7 @@ nlohmann::json DefaultSettings() {
         {"windowWidth", 1280},
         {"windowHeight", 720},
         {"fullscreen", false},
+        {"gameChinese", true},
         {"javaMode", "auto"},
         {"javaPath", ""},
         {"jvmArgs", ""},

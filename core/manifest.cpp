@@ -106,6 +106,21 @@ nlohmann::json FallbackManifest() {
 }  // namespace
 
 GameManifest FetchGameManifest(const nlohmann::json& settings, bool force) {
+    // 强制本地启动：跳过官方清单的网络查询，直接使用磁盘缓存或内置兜底列表。
+    // 适合离线整合包场景，避免启动时卡在网络请求上（没有这道闸时，即使用户勾选了
+    // "强制本地启动"，启动流程仍会去拉官方清单，网络不通就一直停在加载界面）。
+    if (settings.value("forceLocal", false)) {
+        nlohmann::json disk = LoadDiskCache();
+        if (!disk.is_null()) {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            g_cache.raw = disk;
+            g_cache.fetchedAt = NowMs();
+            g_cache.hasMemory = true;
+            return Parse(disk, "cache", "强制本地模式");
+        }
+        return Parse(FallbackManifest(), "fallback", "强制本地模式");
+    }
+
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         if (!force && g_cache.hasMemory && NowMs() - g_cache.fetchedAt < kCacheTtlMs) {

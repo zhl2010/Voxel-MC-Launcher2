@@ -295,30 +295,39 @@ const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
   day: '2-digit'
 })
 
-init()
+init().catch(function (e) {
+  console.error('[Voxel] init 失败：', e)
+  showBootError(e)
+})
 
 async function init() {
   cacheDom()
   if (!api) {
-    showBootError(new Error('Electron 预加载脚本未能加载，请重新启动启动器。'))
+    showBootError(new Error('启动器桥接模块未能加载，请重新启动启动器。'))
     return
   }
   if (api.platform === 'darwin') document.body.classList.add('platform-darwin')
 
-  bindWindowControls()
-  bindNavigation()
-  bindHome()
-  bindVersions()
-  bindMods()
-  bindSettings()
-  bindDirectorySettings()
-  bindAppearance()
-  bindAccount()
-  bindLogs()
-  bindHud()
-  bindKeyboard()
+  // 绑定事件：单个模块出错不能让整个启动流程卡死。
+  // 即使某个 bind 抛错，也要继续走到 setBoot，让用户看到进度而非永远停在默认文案。
+  try {
+    bindWindowControls()
+    bindNavigation()
+    bindHome()
+    bindVersions()
+    bindMods()
+    bindSettings()
+    bindDirectorySettings()
+    bindAppearance()
+    bindAccount()
+    bindLogs()
+    bindHud()
+    bindKeyboard()
+    subscribeGameEvents()
+  } catch (bindError) {
+    console.error('[Voxel] 事件绑定阶段出错：', bindError)
+  }
 
-  subscribeGameEvents()
   setBoot(8, '正在读取本地配置…')
   renderLogEmpty()
 
@@ -379,7 +388,7 @@ function cacheDom() {
     'saveState', 'settingsAvatar', 'settingsAccountName', 'settingsAccountType',
     'settingsLogin', 'settingsLogout',
     'maxMemory', 'maxMemoryValue', 'maxMemoryLimit', 'minMemory', 'minMemoryValue',
-    'minMemoryLimit', 'systemMemory', 'windowWidth', 'windowHeight', 'fullscreen',
+    'minMemoryLimit', 'systemMemory', 'windowWidth', 'windowHeight', 'fullscreen', 'gameChinese',
     'javaModeControl', 'javaManualField', 'javaPath', 'browseJava', 'jvmArgs',
     'proxyUrl', 'mirrorMojang', 'mirrorFabric', 'mirrorForge', 'mirrorNeoForge', 'forceLocal',
     'versionIsolation',
@@ -389,7 +398,7 @@ function cacheDom() {
     'gameDirPath', 'gameDirInput', 'browseGameDir', 'applyGameDir', 'resetGameDir',
     'gameDirFeedback', 'gameDirMode', 'versionsDirPath', 'modsDirPath', 'savesDirPath',
     'resourcepacksDirPath', 'shaderpacksDirPath', 'logsDirPath', 'crashReportsDirPath', 'userDataPath',
-    'aboutLauncher', 'aboutEml', 'aboutElectron', 'aboutPlatform',
+    'aboutLauncher', 'aboutPlatform',
     'copyLogs', 'clearLogs', 'openLatestLog', 'logConsole', 'logCount', 'logLiveDot',
     'accountModal', 'closeAccountModal', 'modalAvatar', 'modalAccountName',
     'uploadSkin', 'clearSkin', 'skinFeedback',
@@ -886,6 +895,11 @@ function bindSettings() {
   dom.fullscreen.addEventListener('change', () => {
     state.settings.fullscreen = dom.fullscreen.checked
     queueSave({ fullscreen: dom.fullscreen.checked })
+  })
+
+  dom.gameChinese.addEventListener('change', () => {
+    state.settings.gameChinese = dom.gameChinese.checked
+    queueSave({ gameChinese: dom.gameChinese.checked })
   })
 
   dom.javaSegments.forEach((button) => {
@@ -1544,7 +1558,10 @@ async function loadVersions(force = false) {
   setSync('loading', force ? '正在刷新版本清单' : '正在同步版本清单')
 
   try {
-    const data = await invoke(api.getVersions(Boolean(force)))
+    // 给版本清单请求加 20s 上限：网络不通或镜像抽风时，不能让启动界面一直
+    // 停在"正在同步版本清单"。超时后走错误分支，保留上一份清单或显示错误态，
+    // 用户可以点"刷新清单"重试。
+    const data = await withTimeout(invoke(api.getVersions(Boolean(force))), 20000)
     const next = data.versions || []
     // 先判空再落地：直接赋值会把上一份好数据覆盖成空，列表当场变白
     if (!next.length) throw new Error(data.error || '版本清单为空')
@@ -1581,13 +1598,13 @@ async function loadVersions(force = false) {
   } catch (error) {
     // 保留刷新前的清单；只有本来就空才显示整页错误
     state.versions = previous
-    state.versionsError = error.message
+    state.versionsError = error?.message === 'timeout' ? '网络超时，版本清单未同步' : error.message
     setSync(previous.length ? 'warn' : 'error', '版本清单加载失败')
     if (previous.length) {
       renderVersionList()
-      toast(`刷新版本清单失败：${error.message}`, 'error')
+      toast(`刷新版本清单失败：${state.versionsError}`, 'error')
     } else {
-      renderVersionError(error.message)
+      renderVersionError(state.versionsError)
       renderQuickError()
     }
     updateHomeVersion()
@@ -2974,7 +2991,7 @@ async function refreshHomeLoader() {
       )
     }
   } catch {
-    // Keep the saved loader; eml-lib will report a precise error at launch time.
+    // Keep the saved loader; the launcher will report a precise error at launch time.
   }
   updateHomeVersion()
 }
@@ -3097,6 +3114,7 @@ function applySettingsToUI() {
   dom.windowWidth.value = String(settings.windowWidth)
   dom.windowHeight.value = String(settings.windowHeight)
   dom.fullscreen.checked = Boolean(settings.fullscreen)
+  dom.gameChinese.checked = settings.gameChinese !== false
   dom.javaPath.value = settings.javaPath || ''
   dom.jvmArgs.value = settings.jvmArgs || ''
   dom.proxyUrl.value = settings.proxyUrl || ''
@@ -3257,10 +3275,7 @@ function updateSettingsMeta() {
   }
 
   dom.aboutLauncher.textContent = `v${info.version}`
-  dom.aboutEml.textContent = `v${info.emlVersion}`
-  dom.aboutElectron.textContent = `v${info.electron}`
   dom.aboutPlatform.textContent = `${platformName(info.platform)} · ${info.arch}`
-  dom.sideEmelVersion && (dom.sideEmelVersion.textContent = info.emlVersion)
 }
 
 function updateStaticInfo() {
