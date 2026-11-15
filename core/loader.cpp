@@ -1,6 +1,7 @@
 #include "loader.h"
 
 #include "crypto.h"
+#include "dirs.h"
 #include "fs.h"
 #include "installer.h"
 #include "proc.h"
@@ -201,14 +202,254 @@ nlohmann::json InstallFabric(const nlohmann::json& settings, const std::wstring&
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// NeoForge 26.x 的运行前提
+//
+// 官方安装器除了写版本 JSON，还会把两样东西落到 libraries：
+//   1. 安装包里自带的 neoforge-<ver>-universal.jar
+//   2. installertools 用安装包里的 binpatch 处理过的客户端 jar
+//      （FML 按 net.minecraft:client:<mc>-<neoform>:srg 这个老路径查找）
+// 这两步以前被跳过了，于是启动时报
+// "Your NeoForge installation is corrupted" / "The NeoForge jar is missing"。
+// ---------------------------------------------------------------------------
+struct MavenPart {
+    std::string group;
+    std::string artifact;
+    std::string version;
+    std::string classifier;
+};
+
+MavenPart ParseMaven(const std::string& name) {
+    MavenPart part;
+    std::vector<std::string> pieces;
+    std::string token;
+    for (char ch : name) {
+        if (ch == ':') {
+            pieces.push_back(token);
+            token.clear();
+        } else {
+            token.push_back(ch);
+        }
+    }
+    pieces.push_back(token);
+    if (pieces.size() < 3) return part;
+    part.group = pieces[0];
+    part.artifact = pieces[1];
+    part.version = pieces[2];
+    if (pieces.size() > 3) part.classifier = pieces[3];
+    return part;
+}
+
+std::wstring MavenRelPath(const MavenPart& part) {
+    if (part.artifact.empty()) return std::wstring();
+    std::wstring group = Utf8ToWide(part.group);
+    for (auto& ch : group) {
+        if (ch == L'.') ch = L'/';
+    }
+    std::wstring file = Utf8ToWide(part.artifact) + L"-" + Utf8ToWide(part.version);
+    if (!part.classifier.empty()) file += L"-" + Utf8ToWide(part.classifier);
+    return group + L"/" + Utf8ToWide(part.artifact) + L"/" + Utf8ToWide(part.version) + L"/" + file +
+           L".jar";
+}
+
+// 从安装包（zip）里解出一个成员到独立目录；成功返回 true。
+bool ExtractMember(const std::wstring& archive, const std::wstring& member,
+                   const std::wstring& dest) {
+    fs::DeleteTree(dest);
+    if (!fs::EnsureDir(dest)) return false;
+    int code = 0;
+    std::wstring error;
+    return proc::RunCapture(TarExe(), {L"-xf", archive, L"-C", dest, member}, dest, 120000, &code,
+                            &error);
+}
+
+// 保证 maven 构件在 libraries 里（缺了就从 BMCL 镜像下载）。
+std::wstring EnsureMaven(const nlohmann::json& settings, const std::wstring& libraries,
+                         const MavenPart& part, std::wstring* error) {
+    const std::wstring rel = MavenRelPath(part);
+    if (rel.empty()) return std::wstring();
+    const std::wstring dest = fs::Join(libraries, rel);
+    if (fs::Exists(dest)) return dest;
+    if (!fs::EnsureDir(fs::ParentDir(dest))) {
+        if (error) *error = L"无法创建目录：" + fs::ParentDir(dest);
+        return std::wstring();
+    }
+    std::wstring downloadError;
+    const std::wstring url = L"https://maven.neoforged.net/releases/" + rel;
+    if (!net::GetFile(url, dest, settings, &downloadError, [](uint64_t) {}, nullptr)) {
+        if (error) *error = downloadError.empty() ? L"下载失败：" + rel : downloadError;
+        return std::wstring();
+    }
+    return dest;
+}
+
+std::string StripQuotes(std::string text) {
+    while (!text.empty() && (text.front() == '\'' || text.front() == '"')) text.erase(text.begin());
+    while (!text.empty() && (text.back() == '\'' || text.back() == '"')) text.pop_back();
+    return text;
+}
+
+// NeoForge 安装完之后补齐 FML 需要的两个文件：universal jar 与 srg 客户端 jar。
+bool EnsureNeoForgeRuntime(const nlohmann::json& settings, const std::wstring& gameDir,
+                           const std::wstring& installerJar, const std::string& mc,
+                           const std::string& loaderVersion, std::wstring* error) {
+    const std::wstring libraries = fs::Join(gameDir, L"libraries");
+    const std::wstring temp = fs::UniqueTempPath(L"voxel-neoforge");
+    if (!fs::EnsureDir(temp)) {
+        if (error) *error = L"无法创建临时目录";
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        // 1) universal jar：安装包内路径是 maven/net/neoforged/neoforge/<ver>/...
+        const std::wstring universalRel = L"net/neoforged/neoforge/" +
+                                          Utf8ToWide(loaderVersion) + L"/neoforge-" +
+                                          Utf8ToWide(loaderVersion) + L"-universal.jar";
+        if (!fs::Exists(fs::Join(libraries, universalRel))) {
+            const std::wstring unpack = fs::Join(temp, L"universal");
+            if (!ExtractMember(installerJar, L"maven/" + universalRel, unpack)) break;
+            const std::wstring src = fs::Join(unpack, L"maven/" + universalRel);
+            const std::wstring dest = fs::Join(libraries, universalRel);
+            if (!fs::Exists(src) || !fs::EnsureDir(fs::ParentDir(dest))) break;
+            if (!CopyFileW(src.c_str(), dest.c_str(), FALSE)) break;
+        }
+
+        // 2) install_profile.json：拿 installertools 坐标与 NeoForm 版本号
+        const std::wstring profileDir = fs::Join(temp, L"profile");
+        if (!ExtractMember(installerJar, L"install_profile.json", profileDir)) break;
+        const std::string rawProfile = fs::ReadText(fs::Join(profileDir, L"install_profile.json"));
+        const nlohmann::json profile = nlohmann::json::parse(rawProfile, nullptr, false);
+        if (profile.is_discarded() || !profile.is_object()) break;
+
+        std::string mcpVersion;
+        if (profile.contains("data") && profile["data"].is_object() &&
+            profile["data"].contains("MCP_VERSION")) {
+            const auto& mcp = profile["data"]["MCP_VERSION"];
+            if (mcp.is_object()) {
+                mcpVersion = StripQuotes(mcp.value("client", std::string()));
+            } else if (mcp.is_string()) {
+                mcpVersion = StripQuotes(mcp.get<std::string>());
+            }
+        }
+        if (mcpVersion.empty()) break;
+
+        // 找到客户端要跑的 processor（PROCESS_MINECRAFT_JAR）
+        MavenPart tool;
+        if (profile.contains("processors") && profile["processors"].is_array()) {
+            for (const auto& processor : profile["processors"]) {
+                if (!processor.is_object()) continue;
+                if (processor.contains("sides") && processor["sides"].is_array()) {
+                    bool serverOnly = true;
+                    for (const auto& side : processor["sides"]) {
+                        if (side.is_string() && side.get<std::string>() != "server") {
+                            serverOnly = false;
+                        }
+                    }
+                    if (serverOnly) continue;
+                }
+                if (processor["args"].dump().find("PROCESS_MINECRAFT_JAR") == std::string::npos) {
+                    continue;
+                }
+                tool = ParseMaven(processor.value("jar", std::string()));
+                break;
+            }
+        }
+        if (tool.artifact.empty()) break;
+
+        std::wstring detail;
+        const std::wstring toolJar = EnsureMaven(settings, libraries, tool, &detail);
+        if (toolJar.empty()) {
+            if (error) *error = detail;
+            break;
+        }
+
+        // 3) 原版客户端 jar（processor 的输入）
+        ResolvedVersion base = ResolveVersion(gameDir, settings, mc, &detail);
+        std::wstring clientJar = fs::Join(
+            fs::Join(fs::Join(gameDir, L"versions"), Utf8ToWide(base.jarId)),
+            Utf8ToWide(base.jarId) + L".jar");
+        if (!fs::Exists(clientJar)) {
+            std::string clientUrl;
+            for (const auto& level : base.levels) {
+                if (!level.json.contains("downloads") || !level.json["downloads"].is_object()) {
+                    continue;
+                }
+                const auto& downloads = level.json["downloads"];
+                if (!downloads.contains("client") || !downloads["client"].is_object()) continue;
+                clientUrl = downloads["client"].value("url", std::string());
+                if (!clientUrl.empty()) {
+                    clientJar = fs::Join(
+                        fs::Join(fs::Join(gameDir, L"versions"), Utf8ToWide(level.id)),
+                        Utf8ToWide(level.id) + L".jar");
+                    break;
+                }
+            }
+            if (clientUrl.empty() || !fs::EnsureDir(fs::ParentDir(clientJar))) {
+                if (error) *error = L"找不到 Minecraft " + Utf8ToWide(mc) + L" 的客户端 jar";
+                break;
+            }
+            if (!net::GetFile(Utf8ToWide(clientUrl), clientJar, settings, &detail,
+                              [](uint64_t) {}, nullptr)) {
+                if (error) *error = detail;
+                break;
+            }
+        }
+
+        // 4) binpatch
+        const std::wstring binpatchDir = fs::Join(temp, L"binpatch");
+        if (!ExtractMember(installerJar, L"data/client.lzma", binpatchDir)) break;
+        const std::wstring binpatch = fs::Join(binpatchDir, L"data/client.lzma");
+
+        // 5) 跑 processor：生成 patched 客户端，同时落到 FML 期望的 srg 路径
+        const std::wstring patchedRel = L"net/neoforged/minecraft-client-patched/" +
+                                        Utf8ToWide(loaderVersion) +
+                                        L"/minecraft-client-patched-" + Utf8ToWide(loaderVersion) +
+                                        L".jar";
+        const std::wstring srgRel = L"net/minecraft/client/" + Utf8ToWide(mcpVersion) +
+                                    L"/client-" + Utf8ToWide(mcpVersion) + L"-srg.jar";
+        const std::wstring patched = fs::Join(libraries, patchedRel);
+        const std::wstring srg = fs::Join(libraries, srgRel);
+        if (!fs::EnsureDir(fs::ParentDir(patched)) || !fs::EnsureDir(fs::ParentDir(srg))) break;
+
+        std::wstring javaError;
+        const JavaInfo java = SelectJava(settings, gameDir, base.javaMajor, &javaError);
+        if (java.path.empty()) {
+            if (error) *error = javaError.empty() ? L"找不到可用的 Java" : javaError;
+            break;
+        }
+
+        int code = 0;
+        std::wstring runError;
+        const std::vector<std::wstring> args{L"-jar",           toolJar,
+                                             L"--task",         L"PROCESS_MINECRAFT_JAR",
+                                             L"--no-mod-manifest", L"--input", clientJar,
+                                             L"--output",       patched,
+                                             L"--extract-libraries-to", libraries + L"\\",
+                                             L"--apply-patches", binpatch};
+        if (!proc::RunCapture(java.path, args, temp, 900000, &code, &runError) || code != 0 ||
+            !fs::Exists(patched)) {
+            if (error) {
+                *error = L"NeoForge processor 执行失败" +
+                         (runError.empty() ? L"" : L"：" + runError);
+            }
+            break;
+        }
+        CopyFileW(patched.c_str(), srg.c_str(), FALSE);
+        if (!fs::Exists(srg)) break;
+        ok = true;
+    } while (false);
+
+    fs::DeleteTree(temp);
+    if (!ok && error && error->empty()) *error = L"NeoForge 运行时文件准备失败";
+    return ok;
+}
+
 // Forge / NeoForge：从官方 installer jar 里取出 version.json 作为版本元数据。
 //
 // 这条路避开了"跑 processor"的重活——installer 里的 version.json 已经是
 // 完整的版本描述（mainClass、libraries、arguments），inheritsFrom 指回原版，
 // 和 Fabric 一样可以直接落地成一个可启动的实例。
-//
-// processor 只负责把原版 jar 反混淆成 srg 名字，1.17+ 的 Forge/NeoForge
-// 由各自的 bootstrap 在启动时处理，所以元数据落地即可用。
 struct NeoLikeSource {
     std::string loader;        // forge / neoforge
     std::wstring metaUrl;      // maven-metadata.xml（走 BMCL 镜像）
@@ -243,7 +484,10 @@ nlohmann::json InstallNeoLike(const nlohmann::json& settings, const std::wstring
         if (best.empty()) {
             throw std::runtime_error(source.loader + " 没有支持 Minecraft " + mc + " 的版本");
         }
-        loaderVersion = best;
+        // best 是去掉前缀的构建号；NeoForge 的 maven 路径要完整版本号（21.1.266）。
+        loaderVersion = source.versionPrefix + best;
+    } else if (isNeo && loaderVersion.rfind(source.versionPrefix, 0) != 0) {
+        loaderVersion = source.versionPrefix + loaderVersion;
     }
 
     // 2) 下载 installer 并取出 version.json
@@ -304,20 +548,38 @@ nlohmann::json InstallNeoLike(const nlohmann::json& settings, const std::wstring
 
     const std::string raw =
         fs::ReadText(fs::Join(tempDir, oldStyle ? L"install_profile.json" : L"version.json"));
-    fs::DeleteTree(tempDir);
     if (raw.empty()) {
+        fs::DeleteTree(tempDir);
         throw std::runtime_error(source.loader + " 安装器里没有 version.json 或 install_profile.json");
     }
 
     nlohmann::json profile = nlohmann::json::parse(raw, nullptr, false);
     if (profile.is_discarded() || !profile.is_object()) {
+        fs::DeleteTree(tempDir);
         throw std::runtime_error(source.loader + " 的安装信息格式异常");
     }
     if (oldStyle) {
         if (!profile.contains("versionInfo") || !profile["versionInfo"].is_object()) {
+            fs::DeleteTree(tempDir);
             throw std::runtime_error(source.loader + " 安装器缺少 versionInfo，无法生成版本");
         }
         profile = profile["versionInfo"];
+    }
+
+    // NeoForge 26.x：FML 启动时还要 universal jar 和 srg 客户端 jar，
+    // 这两样由安装器的 processor 生成，必须在这里补上；否则版本能写出来但一启动就报损坏。
+    if (isNeo && !oldStyle) {
+        std::wstring runtimeError;
+        const bool runtimeOk =
+            EnsureNeoForgeRuntime(settings, gameDir, jarPath, mc, loaderVersion, &runtimeError);
+        fs::DeleteTree(tempDir);
+        if (!runtimeOk) {
+            throw std::runtime_error(runtimeError.empty()
+                                         ? std::string("NeoForge 运行时文件准备失败")
+                                         : WideToUtf8(runtimeError));
+        }
+    } else {
+        fs::DeleteTree(tempDir);
     }
 
     // 4) 落地成独立实例
@@ -354,15 +616,19 @@ NeoLikeSource NeoForgeSource() {
         ""};
 }
 
-// NeoForge 的版本号前两位由 Minecraft 版本推出：1.21.1 → 21.1.
+// NeoForge 的版本号由 Minecraft 版本推出，两种规则：
+//   1.x.y 时代：去掉开头的 "1." → 1.21 → 21.0.，1.21.1 → 21.1.
+//   26.x 时代：直接沿用完整版本号 → 26.1.2.126、26.3.0.x
 std::string NeoForgePrefixFor(const std::string& mc) {
+    // 只接受纯数字 + 点的版本号，避免把 26w01a 这类快照当成版本
+    for (char ch : mc) {
+        if (!std::isdigit(static_cast<unsigned char>(ch)) && ch != '.') return "";
+    }
     // "1.21.1" → major=1, minor=21, patch=1
     int major = 0, minor = 0, patch = 0;
-    char extra = 0;
-    if (std::sscanf(mc.c_str(), "%d.%d.%d%c", &major, &minor, &patch, &extra) < 2) return "";
-    if (major != 1) return "";
-    // 1.21 → 21.0.，1.21.1 → 21.1.
-    return std::to_string(minor) + "." + std::to_string(patch) + ".";
+    if (std::sscanf(mc.c_str(), "%d.%d.%d", &major, &minor, &patch) < 2) return "";
+    if (major == 1) return std::to_string(minor) + "." + std::to_string(patch) + ".";
+    return mc + ".";
 }
 
 nlohmann::json ListLoaders(const nlohmann::json& settings, const std::string& mcVersion) {
@@ -448,8 +714,10 @@ nlohmann::json ListLoaders(const nlohmann::json& settings, const std::string& mc
                 if (best.empty() || CompareDotted(tail, best) > 0) best = tail;
             }
             if (!best.empty()) {
-                neoforge.latestVersion = best;
-                neoforge.detail = "最新 " + best;
+                // 必须回传完整版本号（26.1.2.126），不能只给构建号（126）：
+                // 安装时直接拿它拼 maven 路径，缺前缀就是 404。
+                neoforge.latestVersion = neoPrefix + best;
+                neoforge.detail = "最新 " + neoforge.latestVersion;
                 neoforge.available = true;
             } else {
                 neoforge.detail = "该版本暂无 NeoForge";
@@ -518,30 +786,35 @@ nlohmann::json InstallLoader(const nlohmann::json& settings, const std::wstring&
 
     if (loader == "forge" || loader == "neoforge") {
         const bool isNeo = loader == "neoforge";
-        if (!loaderVersion.empty()) {
+        NeoLikeSource source = isNeo ? NeoForgeSource() : ForgeSource();
+        std::string resolvedVersion = loaderVersion;
+        if (isNeo) {
+            source.versionPrefix = NeoForgePrefixFor(baseVersion);
+            if (source.versionPrefix.empty()) {
+                throw std::runtime_error("无法从 Minecraft " + baseVersion +
+                                         " 推断 NeoForge 版本号（需要 1.21.1 或 26.1.2 这类数字版本）");
+            }
+            // 前端可能只传来构建号（266 / 126）：补回完整版本号再拼 maven 路径。
+            if (!resolvedVersion.empty() && resolvedVersion.rfind(source.versionPrefix, 0) != 0) {
+                resolvedVersion = source.versionPrefix + resolvedVersion;
+            }
+        }
+
+        if (!resolvedVersion.empty()) {
             const std::string id = customName.empty()
-                                        ? InstanceIdFor(baseVersion, loader, loaderVersion)
+                                        ? InstanceIdFor(baseVersion, loader, resolvedVersion)
                                         : customName;
             if (fs::Exists(fs::Join(VersionDir(gameDir, id), Utf8ToWide(id) + L".json"))) {
                 return nlohmann::json{{"id", id},
                                       {"loader", loader},
-                                      {"loaderVersion", loaderVersion},
+                                      {"loaderVersion", resolvedVersion},
                                       {"alreadyInstalled", true},
                                       {"librariesDownloaded", 0}};
             }
         }
 
-        NeoLikeSource source = isNeo ? NeoForgeSource() : ForgeSource();
-        if (isNeo) {
-            source.versionPrefix = NeoForgePrefixFor(baseVersion);
-            if (source.versionPrefix.empty()) {
-                throw std::runtime_error("无法从 Minecraft " + baseVersion +
-                                         " 推断 NeoForge 版本号（需要 1.x.y 形式）");
-            }
-        }
-
         const nlohmann::json installed =
-            InstallNeoLike(settings, gameDir, baseVersion, source, loaderVersion, customName);
+            InstallNeoLike(settings, gameDir, baseVersion, source, resolvedVersion, customName);
         return nlohmann::json{{"id", installed.value("id", std::string())},
                               {"loader", loader},
                               {"loaderVersion", installed.value("loaderVersion", std::string())},

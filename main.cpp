@@ -86,7 +86,7 @@ nlohmann::json BuildAppInfo(const nlohmann::json& settings) {
     const voxel::JavaInfo java = voxel::SelectJava(settings, gameDir, 0, nullptr);
 
     return nlohmann::json{
-        {"version", "2.3.4"},
+        {"version", "2.4.0"},
         {"emlVersion", "native"},
         {"electron", "—"},
         {"chrome", "—"},

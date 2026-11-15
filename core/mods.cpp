@@ -11,6 +11,8 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -228,6 +230,7 @@ nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameD
     std::string downloadUrl;
     std::string fileName;
     std::string expectedSha1;
+    uint64_t expectedSize = 0;  // Modrinth 返回的文件大小，用来算下载百分比
     std::string chosenVersionId = versionId;
 
     if (chosenVersionId.empty()) {
@@ -243,6 +246,7 @@ nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameD
         chosenVersionId = list.front().value("id", std::string());
         downloadUrl = (*file).value("url", std::string());
         fileName = (*file).value("filename", std::string());
+        expectedSize = (*file).value("size", 0ull);
         if ((*file).contains("hashes") && (*file)["hashes"].is_object()) {
             expectedSha1 = (*file)["hashes"].value("sha1", std::string());
         }
@@ -256,6 +260,7 @@ nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameD
         if (!file) throw std::runtime_error("该版本没有可下载文件");
         downloadUrl = (*file).value("url", std::string());
         fileName = (*file).value("filename", std::string());
+        expectedSize = (*file).value("size", 0ull);
         if ((*file).contains("hashes") && (*file)["hashes"].is_object()) {
             expectedSha1 = (*file)["hashes"].value("sha1", std::string());
         }
@@ -285,20 +290,48 @@ nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameD
 
     const std::wstring dest = fs::Join(dir, Utf8ToWide(fileName));
     std::wstring error;
-    uint64_t downloaded = 0;
-    if (!net::GetFile(Utf8ToWide(downloadUrl), dest, settings, &error,
-                     [&](uint64_t delta) {
-                         downloaded += delta;
-                         if (progress) {
-                             progress(nlohmann::json{{"stage", "download"},
-                                                     {"fileName", fileName},
-                                                     {"downloadedBytes", downloaded}});
-                         }
-                         // 取消由外部设置 cancel 标志，GetFile 下一次循环会自行退出
-                     },
-                     cancel)) {
+    std::atomic<uint64_t> downloaded{0};
+    // 分段下载会让 onChunk 被多个线程并发调用：用原子量累计，进度按 120ms 节流上报，
+    // 速度用"上次上报点 → 现在"的字节差算，前端直接显示 KB/s。
+    std::mutex progressMutex;
+    uint64_t lastBytes = 0;
+    uint64_t lastTick = GetTickCount64();
+    const auto onChunk = [&](uint64_t delta) {
+        const uint64_t bytes = downloaded.fetch_add(delta) + delta;
+        if (!progress) return;
+        std::lock_guard<std::mutex> lock(progressMutex);
+        const uint64_t now = GetTickCount64();
+        if (now - lastTick < 120 && (expectedSize == 0 || bytes < expectedSize)) return;
+        const double seconds = (now - lastTick) / 1000.0;
+        const double speed = seconds > 0 ? (bytes - lastBytes) / seconds : 0.0;
+        lastTick = now;
+        lastBytes = bytes;
+        const double percent =
+            expectedSize > 0 ? std::min(99.0, bytes * 100.0 / static_cast<double>(expectedSize))
+                             : 0.0;
+        progress(nlohmann::json{{"stage", "download"},
+                                {"percent", percent},
+                                {"fileName", fileName},
+                                {"downloadedBytes", bytes},
+                                {"totalBytes", expectedSize},
+                                {"speed", static_cast<uint64_t>(speed)},
+                                {"finished", false}});
+    };
+
+    if (!net::GetFileParallel(Utf8ToWide(downloadUrl), dest, settings, &error, onChunk, cancel)) {
         if (cancel && cancel->load()) throw std::runtime_error("下载已取消");
         throw std::runtime_error("下载失败" + (error.empty() ? "" : "：" + WideToUtf8(error)));
+    }
+
+    if (progress) {
+        const uint64_t bytes = downloaded.load();
+        progress(nlohmann::json{{"stage", "download"},
+                                {"percent", 100},
+                                {"fileName", fileName},
+                                {"downloadedBytes", bytes},
+                                {"totalBytes", expectedSize ? expectedSize : bytes},
+                                {"speed", 0},
+                                {"finished", true}});
     }
 
     // Modrinth 响应自带 sha1：拿到就校验，不符删掉，防止 CDN 上的文件被换

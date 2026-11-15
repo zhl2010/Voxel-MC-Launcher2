@@ -28,6 +28,14 @@ bool GetFile(const std::wstring& url, const std::wstring& dest, const nlohmann::
              std::wstring* error, const std::function<void(uint64_t)>& onChunk,
              const std::atomic<bool>* cancel = nullptr);
 
+// 分段下载：探测到服务器支持 Range 时把文件切成几段并发拉取，
+// 某段连接中断/变慢会从已写入位置续传而不是整份重下；不支持 Range 或文件太小时自动退回 GetFile。
+// onChunk 会被多个线程同时调用，调用方需自行保证累计值线程安全。
+bool GetFileParallel(const std::wstring& url, const std::wstring& dest,
+                     const nlohmann::json& settings, std::wstring* error,
+                     const std::function<void(uint64_t)>& onChunk,
+                     const std::atomic<bool>* cancel = nullptr);
+
 // 单次请求（不带镜像/重试），给需要自己控制候选顺序的场景用
 bool GetFileOnce(const std::wstring& url, const std::wstring& dest, const std::string& proxy,
                  std::wstring* error, const std::function<void(uint64_t)>& onChunk,

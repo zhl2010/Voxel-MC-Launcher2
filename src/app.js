@@ -220,6 +220,8 @@ const state = {
   loaderRequestSeq: 0,
   // True while a loader is being installed into an independent version instance.
   installingLoader: false,
+  // 正在安装的加载器类型（fabric/forge/...），用于在卡片上显示「安装中…」。
+  installingLoaderType: '',
   saveTimer: null,
   saving: false,
   verifying: false,
@@ -671,6 +673,15 @@ async function handleDownloadVersion() {
   let id = state.pendingVersion || state.settings.version
   if (!id) {
     toast('请先选择一个版本', 'error')
+    return
+  }
+  // 加载器卡片只是"选择"：真正开始安装要按下面的下载按钮。
+  // 和原版下载共用一个按钮，少一个入口，也避免误触。
+  const activeLoader = state.pendingLoader || 'vanilla'
+  if (activeLoader !== 'vanilla') {
+    const option = (state.loaderCache.get(id) || {})[activeLoader] || {}
+    const chosen = state.pendingLoaderVersion[activeLoader] || option.version || ''
+    await installLoaderInstance(id, activeLoader, chosen)
     return
   }
   if (state.verifyingVersionId) {
@@ -1910,8 +1921,18 @@ function updateVersionDetail() {
   // 下载按钮常驻。已安装的版本再点一次是「以它为模板新建一个同配置实例」，
   // 而不是变成校验修补——想修补请到「已安装」视图里操作。
   if (dom.downloadVersion) {
-    dom.downloadVersion.disabled = false
-    dom.downloadVersion.textContent = '下载此版本'
+    if (state.installingLoader) {
+      dom.downloadVersion.disabled = true
+      dom.downloadVersion.textContent = '正在安装…'
+    } else {
+      dom.downloadVersion.disabled = false
+      // 选中的加载器决定这个按钮做什么：原版 → 下载版本；加载器 → 装成独立实例。
+      const loader = state.pendingLoader || 'vanilla'
+      dom.downloadVersion.textContent =
+        loader === 'vanilla'
+          ? '下载此版本'
+          : `下载并安装 ${LOADER_NAMES[loader] || loader}${state.pendingLoaderVersion[loader] ? ` ${state.pendingLoaderVersion[loader]}` : ''}`
+    }
   }
 }
 
@@ -2058,6 +2079,14 @@ async function installLoaderInstance(mc, loader, loaderVersion) {
   const finalName = trimmed && trimmed !== defaultName ? trimmed : ''
 
   state.installingLoader = true
+  state.installingLoaderType = loader
+  // 立刻把卡片切成「安装中…」并锁住下载按钮：安装要下载安装包，几秒内没有反馈
+  // 会被当成"点了没反应"。
+  loadPendingLoaders()
+  if (dom.downloadVersion) {
+    dom.downloadVersion.disabled = true
+    dom.downloadVersion.textContent = '正在安装…'
+  }
   try {
     const result = await invoke(
       api.installLoader({
@@ -2070,19 +2099,29 @@ async function installLoaderInstance(mc, loader, loaderVersion) {
     if (result.alreadyInstalled) {
       toast(`独立版本 ${result.id} 已安装`, 'info')
     } else {
-      toast(`已安装独立版本 ${result.id}${result.librariesDownloaded ? `（下载 ${result.librariesDownloaded} 个加载器库）` : ''}`, 'success')
+      toast(`已安装独立版本 ${result.id}${result.librariesDownloaded ? `（含 ${result.librariesDownloaded} 个加载器库）` : ''}`, 'success')
     }
     appendLog('INFO', `已安装独立版本 ${result.id}（${loader} ${result.loaderVersion}）`)
     await loadVersions(true)
+    // 留在原版版本上，让卡片继续显示（可以接着装另一个加载器），
+    // 新实例已经在左侧列表里。以前会跳到新实例，而实例页只显示
+    // "本地自定义版本"，加载器卡片消失，看起来就像选不了加载器。
     if (state.versions.some((item) => item.id === result.id)) {
-      state.pendingVersion = result.id
-      selectVersion(result.id, { scroll: true })
+      state.pendingVersion = mc
+      selectVersion(mc, { scroll: false })
+      // selectVersion 会把选择重置成原版，这里把刚装的加载器选回来。
+      state.pendingLoader = loader
+      renderLoaderOptions(state.loaderCache.get(mc) || {}, '')
+      updateVersionDetail()
     }
   } catch (error) {
     appendLog('ERROR', `加载器安装失败：${error.message}`)
     toast(error.message, 'error')
   } finally {
     state.installingLoader = false
+    state.installingLoaderType = ''
+    loadPendingLoaders()
+    updateVersionDetail()
   }
 }
 
@@ -2094,6 +2133,16 @@ function renderLoaderSkeletons() {
     fragment.append(skeleton)
   }
   dom.loaderOptions.replaceChildren(fragment)
+}
+
+/** 本机已装好的「原版版本 + 加载器」实例：1.21.1 + fabric → 1.21.1-fabric-0.16.9。 */
+function installedLoaderInstance(mc, loader) {
+  if (!mc || !loader || loader === 'vanilla') return ''
+  const prefix = `${mc}-${loader}-`
+  const hit = state.versions.find(
+    (item) => (item.installed || item.local) && String(item.id).startsWith(prefix)
+  )
+  return hit ? hit.id : ''
 }
 
 function renderLoaderOptions(options, errorMessage = '') {
@@ -2109,9 +2158,10 @@ function renderLoaderOptions(options, errorMessage = '') {
     button.type = 'button'
     button.className = 'loader-option'
     button.dataset.loader = type
-    // Only vanilla is "selected": picking Fabric/Quilt/Forge installs an independent version
-    // (PCL/HMCL model) instead of temporarily attaching a loader to this version.
-    if (type === 'vanilla' && state.pendingLoader === 'vanilla') button.classList.add('selected')
+    // 四张卡片都只是"选择"：选中后由下方下载按钮真正开始安装。
+    if (state.pendingLoader === type) button.classList.add('selected')
+    // 安装期间所有卡片都不可点，避免重复触发（重复点击以前会被静默忽略）。
+    if (state.installingLoader) button.disabled = true
 
     const mark = document.createElement('span')
     mark.className = `loader-option-mark loader-mark-${type}`
@@ -2129,9 +2179,16 @@ function renderLoaderOptions(options, errorMessage = '') {
     if (type !== 'vanilla') {
       const action = document.createElement('em')
       action.className = 'loader-install-action'
-      // 原来这里写"安装为独立版本"，但每个加载器本来就是按实例装的，
-      // 这句话对用户没有信息量，还会把卡片撑破；改成直接说"点击安装"。
-      action.textContent = option.available === false ? '暂不可用' : '点击安装'
+      const installedId = installedLoaderInstance(mc, type)
+      if (state.installingLoader) {
+        action.textContent = state.installingLoaderType === type ? '安装中…' : '等待中'
+      } else if (state.pendingLoader === type) {
+        action.textContent = installedId ? `已选中 · 已安装 ${installedId}` : '已选中 · 点下方按钮安装'
+      } else if (installedId) {
+        action.textContent = `已安装 ${installedId}`
+      } else {
+        action.textContent = option.available === false ? '暂不可用' : '点击选择'
+      }
       copy.append(action)
     }
 
@@ -2191,13 +2248,10 @@ function renderLoaderOptions(options, errorMessage = '') {
 
     button.append(mark, copy)
     button.addEventListener('click', () => {
-      if (type === 'vanilla') {
-        state.pendingLoader = 'vanilla'
-        renderLoaderOptions(merged, errorMessage)
-        updateVersionDetail()
-        return
-      }
-      installLoaderInstance(mc, type, state.pendingLoaderVersion[type] || option.version || '')
+      // 只切换选中项，不在这里安装——用户先选好加载器，再按下方按钮。
+      state.pendingLoader = type
+      renderLoaderOptions(merged, errorMessage)
+      updateVersionDetail()
     })
     fragment.append(button)
   }
