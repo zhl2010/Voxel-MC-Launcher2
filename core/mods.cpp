@@ -109,6 +109,22 @@ std::string HostOf(const std::string& url) {
     return url.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
 }
 
+// /project/{id}/version 的筛选串：把游戏版本和加载器带上。
+// 不带过滤会取项目"最新版"——例如把 26.3 的 Sodium 装进 26.1.2 实例，
+// 启动时就会因为 LWJGL 版本对不上直接崩在 SDL_MessageBoxData。
+std::wstring VersionQuery(const std::string& gameVersion, const std::string& loader) {
+    std::wstring query;
+    if (!gameVersion.empty()) {
+        query += L"?game_versions=" +
+                 Utf8ToWide("[" + UrlEncode("\"" + gameVersion + "\"") + "]");
+    }
+    if (!loader.empty() && loader != "vanilla") {
+        query += (query.empty() ? L"?" : L"&") +
+                 Utf8ToWide(std::string("loaders=[\"") + loader + "\"]");
+    }
+    return query;
+}
+
 std::wstring TargetDir(const std::wstring& gameDir, const std::string& projectType,
                        const std::string& targetVersionId, bool* isolatedOut) {
     const std::string folder = DirNameFor(projectType);
@@ -174,15 +190,8 @@ nlohmann::json Versions(const nlohmann::json& settings, const nlohmann::json& pa
     const std::string loader = payload.value("loader", std::string());
 
     std::wstring url = std::wstring(kApi) + L"/project/" + Utf8ToWide(projectId) + L"/version";
-    std::vector<std::wstring> params;
-    if (!gameVersion.empty()) {
-        params.push_back(L"game_versions=" +
-                         Utf8ToWide("[" + UrlEncode("\"" + gameVersion + "\"") + "]"));
-    }
-    if (!loader.empty() && loader != "vanilla") {
-        params.push_back(L"loaders=" + Utf8ToWide("[" + UrlEncode("\"" + loader + "\"") + "]"));
-    }
-    for (size_t i = 0; i < params.size(); ++i) url += (i ? L"&" : L"?") + params[i];
+    const std::wstring query = VersionQuery(gameVersion, loader);
+    url += query;
 
     const nlohmann::json doc = FetchJson(settings, url, "版本列表");
 
@@ -235,11 +244,17 @@ nlohmann::json Install(const nlohmann::json& settings, const std::wstring& gameD
 
     if (chosenVersionId.empty()) {
         if (!SafeVersionId(projectId)) throw std::runtime_error("项目 ID 非法");
+        const std::string gameVersion = payload.value("gameVersion", std::string());
+        const std::string loader = payload.value("loader", std::string());
         const std::wstring url = std::wstring(kApi) + L"/project/" + Utf8ToWide(projectId) +
-                                 L"/version";
+                                 L"/version" + VersionQuery(gameVersion, loader);
         const nlohmann::json list = FetchJson(settings, url, "版本列表");
         if (!list.is_array() || list.empty()) {
-            throw std::runtime_error("该项目没有可下载的版本");
+            throw std::runtime_error(
+                gameVersion.empty()
+                    ? "该项目没有可下载的版本"
+                    : "该项目没有适配 " + gameVersion +
+                          (loader.empty() || loader == "vanilla" ? "" : " / " + loader) + " 的版本");
         }
         const nlohmann::json* file = PrimaryFile(list.front());
         if (!file) throw std::runtime_error("该项目的最新版本没有可下载文件");
